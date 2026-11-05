@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import assert from 'assert';
 import {
-  getWorkspaceRoot, gitListTracked, gitGetBaseline,
+  getWorkspaceRoot, getDataDir, gitListTracked, gitGetBaseline,
   sleep, waitForCondition, enableHunktracker, disableHunktracker,
   writeFileExternally, cleanWorkspace, getStateManager,
   assertThrowawayRepo, repoGit,
@@ -162,7 +162,7 @@ suite('hunktracker clearOnBranchSwitch integration', function () {
 
   test('setClearOnBranchSwitch persists and can be toggled', async () => {
     const root = getWorkspaceRoot();
-    const settingsPath = path.join(root, '.vscode', 'hunktracker', 'settings.json');
+    const settingsPath = path.join(getDataDir(), 'settings.json');
 
     await enableHunktracker();
 
@@ -191,7 +191,7 @@ suite('hunktracker clearOnBranchSwitch integration', function () {
 
   test('clearOnBranchSwitch setting survives disable-enable cycle', async () => {
     const root = getWorkspaceRoot();
-    const settingsPath = path.join(root, '.vscode', 'hunktracker', 'settings.json');
+    const settingsPath = path.join(getDataDir(), 'settings.json');
 
     await enableHunktracker();
 

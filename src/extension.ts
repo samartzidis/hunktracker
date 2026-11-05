@@ -11,12 +11,16 @@ import { DiffCodeLensProvider } from './diffCodeLens';
 import { initLog, log } from './log';
 import { probeProposedApi } from './proposedApi';
 import { getUserSetting } from './userSettings';
+import { sweepOrphanedStorage, describeSweep } from './storageCleanup';
 
 export async function activate(context: vscode.ExtensionContext): Promise<{ getReviewPanel: () => ReviewPanel | undefined; getStateManager: () => StateManager | undefined; getFileWatcher: () => FileWatcher | undefined }> {
   initLog();
   const ext = vscode.extensions.getExtension('GeorgeSamartzidis.hunktracker');
   log(`activate v${ext?.packageJSON?.version ?? '?'}`);
-  const stateManager = new StateManager();
+  // Settings and baselines live in VS Code's per-workspace extension storage, not in the project.
+  const dataDir = context.storageUri?.fsPath;
+  log(`data dir: ${dataDir ?? '(none: no folder open)'}`);
+  const stateManager = new StateManager(dataDir);
   stateManager.onRollback = () => onStateChanged();
 
   // Content provider for showing baselines in diff view
@@ -217,7 +221,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<{ getR
     onStateChanged();
   }
 
-  // ── Watch .vscode/hunktracker/git/ for deletion ────────────────────────────────
+  // ── Watch <data dir>/git/ for deletion ─────────────────────────────────────────
   // Detects: git dir deleted → reset to disabled; settings.json changed → reload patterns.
   const hunktrackerDir = stateManager.dir;
   if (hunktrackerDir) {
@@ -241,7 +245,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<{ getR
       const gitExists = fs.existsSync(gitDir);
       if (!stateManager.enabled && settingsWatcher) {
         // Disabled: release the directory handle. On Windows an open watcher keeps a deleted
-        // .vscode/hunktracker "delete pending", so re-creating it (next Enable) fails with EPERM.
+        // data dir "delete pending", so re-creating it (next Enable) fails with EPERM.
         settingsWatcher.close();
         settingsWatcher = undefined;
       }
@@ -264,6 +268,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<{ getR
         settingsWatcher?.close();
       },
     });
+  }
+
+  // ── Remove data left behind by deleted projects ─────────────────────────────
+  // VS Code does not delete per-workspace extension storage when a project folder goes away.
+  // Shortly after startup (off the critical path) remove our own folder for every project whose
+  // local folder no longer exists. Other extensions' data and the current project are never touched.
+  // Every sweep logs one summary line (even when nothing was found) and one line per failure.
+  if (dataDir) {
+    const sweepTimer = setTimeout(() => {
+      sweepOrphanedStorage(dataDir)
+        .then(r => { for (const line of describeSweep(r)) log(line); })
+        .catch(err => log(`storage sweep failed: ${err}`));
+    }, 30_000);
+    context.subscriptions.push({ dispose: () => clearTimeout(sweepTimer) });
   }
 
   // ── Watch .git/HEAD for branch switches ─────────────────────────────────────

@@ -327,12 +327,6 @@ function renderSettingsScreen(state) {
 
   const patternList = el('div', 'pattern-list');
 
-  // Protected system rule — always enforced, cannot be removed
-  const protectedRow = el('div', 'pattern-row-inner pattern-row-protected');
-  protectedRow.appendChild(el('span', 'pattern-text', '.vscode/hunktracker'));
-  protectedRow.appendChild(el('span', 'pattern-lock', '🔒'));
-  patternList.appendChild(protectedRow);
-
   for (const folder of state.ignorePatterns) {
     const inner = el('div', 'pattern-row-inner');
     const folderEl = el('span', 'pattern-text', folder);

@@ -4,7 +4,7 @@ import * as path from 'path';
 import assert from 'assert';
 import { execSync } from 'child_process';
 import {
-  getWorkspaceRoot, hunktrackerGitEnv, gitListTracked, gitGetBaseline,
+  getWorkspaceRoot, getDataDir, hunktrackerGitEnv, gitListTracked, gitGetBaseline,
   sleep, waitForCondition, enableHunktracker, disableHunktracker,
   writeFileExternally, cleanWorkspace, getReviewPanel, getStateManager,
 } from './helpers';
@@ -202,7 +202,7 @@ suite('hunktracker startup & loading integration', function () {
 
   test('corrupted git dir (HEAD missing) is re-initialized on enable', async () => {
     const root = getWorkspaceRoot();
-    const hunktrackerDir = path.join(root, '.vscode', 'hunktracker');
+    const hunktrackerDir = getDataDir();
     const gitDir = path.join(hunktrackerDir, 'git');
 
     // Create a file and enable hunktracker normally
@@ -246,7 +246,7 @@ suite('hunktracker startup & loading integration', function () {
     await waitForCondition(() => gitListTracked(root).includes('test.txt'), 5000);
 
     // Corrupt the hunktracker git index to force syncIgnoreState to potentially fail
-    const gitIndexPath = path.join(root, '.vscode', 'hunktracker', 'git', 'index');
+    const gitIndexPath = path.join(getDataDir(), 'git', 'index');
     if (fs.existsSync(gitIndexPath)) {
       // Write garbage to the index file
       fs.writeFileSync(gitIndexPath, 'corrupted-data');

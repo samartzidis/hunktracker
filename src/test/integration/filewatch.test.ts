@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import assert from 'assert';
 import {
-  getWorkspaceRoot, gitListTracked, gitGetBaseline,
+  getWorkspaceRoot, getDataDir, gitListTracked, gitGetBaseline,
   sleep, waitForCondition, enableHunktracker, disableHunktracker,
   writeFileExternally, cleanWorkspace, getStateManager, getFileWatcher,
   relPath,
@@ -65,7 +65,7 @@ suite('hunktracker file watcher integration', function () {
     writeFileExternally(path.join(root, 'file.txt'), 'hello\n');
     await enableHunktracker();
 
-    const gitDir = path.join(root, '.vscode', 'hunktracker', 'git');
+    const gitDir = path.join(getDataDir(), 'git');
     await waitForCondition(() => fs.existsSync(gitDir), 5000);
 
     await disableHunktracker();

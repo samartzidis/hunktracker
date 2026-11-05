@@ -38,9 +38,10 @@ const DEFAULT_SETTINGS: Settings = {
 
 /**
  * Manages all hunktracker persistent state via:
- *   .vscode/hunktracker/settings.json  — enabled flag + ignorePatterns
- *   .vscode/hunktracker/git/           — private git repo storing baselines
+ *   <hunktrackerDir>/settings.json  — ignorePatterns and other per-project settings
+ *   <hunktrackerDir>/git/           — private git repo storing baselines
  *
+ * hunktrackerDir is the extension's per-workspace storage folder (outside the project).
  * The git repo uses the workspace root as its work tree but keeps all git
  * metadata inside the hunktracker directory, so it never touches the project's
  * own .git and works even when the project has no git at all.

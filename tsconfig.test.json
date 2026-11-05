@@ -16,6 +16,7 @@
     "src/fileOrder.ts",
     "src/hunktrackerGit.ts",
     "src/pathNormalize.ts",
+    "src/storageCleanup.ts",
     "src/proposedApi.ts"
   ],
   "exclude": [

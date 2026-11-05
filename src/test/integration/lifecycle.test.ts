@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import assert from 'assert';
 import {
-  getWorkspaceRoot, gitListTracked, gitGetBaseline,
+  getWorkspaceRoot, getDataDir, gitListTracked, gitGetBaseline,
   sleep, waitForCondition, enableHunktracker, disableHunktracker,
   writeFileExternally, cleanWorkspace,
 } from './helpers';
@@ -24,7 +24,7 @@ suite('hunktracker lifecycle integration', function () {
 
   test('enable creates hunktracker git directory and settings', async () => {
     const root = getWorkspaceRoot();
-    const hunktrackerDir = path.join(root, '.vscode', 'hunktracker');
+    const hunktrackerDir = getDataDir();
     const gitDir = path.join(hunktrackerDir, 'git');
     const settingsPath = path.join(hunktrackerDir, 'settings.json');
 
@@ -39,11 +39,16 @@ suite('hunktracker lifecycle integration', function () {
     assert.ok(Array.isArray(settings.ignorePatterns), 'Settings should have ignorePatterns');
     assert.ok(settings.ignorePatterns.includes('.git'), '.git should be in default ignorePatterns');
     assert.strictEqual(settings.respectGitignore, true, 'respectGitignore should default to true');
+
+    // Data lives in extension storage, never inside the project
+    const rel = path.relative(root, hunktrackerDir);
+    assert.ok(rel.startsWith('..') || path.isAbsolute(rel), `data dir must be outside the workspace, got ${hunktrackerDir}`);
+    assert.ok(!fs.existsSync(path.join(root, '.vscode', 'hunktracker')), 'no .vscode/hunktracker in the project');
   });
 
   test('disable removes git directory but preserves settings', async () => {
     const root = getWorkspaceRoot();
-    const hunktrackerDir = path.join(root, '.vscode', 'hunktracker');
+    const hunktrackerDir = getDataDir();
     const gitDir = path.join(hunktrackerDir, 'git');
     const settingsPath = path.join(hunktrackerDir, 'settings.json');
 
@@ -90,7 +95,7 @@ suite('hunktracker lifecycle integration', function () {
 
   test('setIgnorePatterns persists to settings.json', async () => {
     const root = getWorkspaceRoot();
-    const settingsPath = path.join(root, '.vscode', 'hunktracker', 'settings.json');
+    const settingsPath = path.join(getDataDir(), 'settings.json');
 
     await enableHunktracker();
 
@@ -103,7 +108,7 @@ suite('hunktracker lifecycle integration', function () {
 
   test('setRespectGitignore persists to settings.json', async () => {
     const root = getWorkspaceRoot();
-    const settingsPath = path.join(root, '.vscode', 'hunktracker', 'settings.json');
+    const settingsPath = path.join(getDataDir(), 'settings.json');
 
     await enableHunktracker();
 
@@ -116,7 +121,7 @@ suite('hunktracker lifecycle integration', function () {
 
   test('setClearOnBranchSwitch persists to settings.json', async () => {
     const root = getWorkspaceRoot();
-    const settingsPath = path.join(root, '.vscode', 'hunktracker', 'settings.json');
+    const settingsPath = path.join(getDataDir(), 'settings.json');
 
     await enableHunktracker();
 

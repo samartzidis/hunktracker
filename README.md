@@ -10,7 +10,7 @@ Based on [molon/hunkwise](https://github.com/molon/hunkwise) but incorporating i
 - **Hunk navigation.** `‹` / `›` buttons and `Alt+,` / `Alt+.` jump to the previous or next hunk, carry on into the next changed file, and wrap around at the end.
 - **Auto-accept on startup** (off by default). Accepts everything still pending when you reopen a workspace.
 - **Auto-reveal panel** (off by default). For a side-bar layout: shows the Hunk Tracker view when a file gets new changes and hides it when nothing is pending. Pick a pane to return to afterwards (for example Claude Code) in the Hunk Tracker settings screen; nothing happens if Hunk Tracker could not hide.
-- **Your `.gitignore` is left alone.** Hunk Tracker keeps its data in `.vscode/hunktracker/`. Add that folder to your `.gitignore` if you don't want it in `git status`.
+- **Your project stays clean.** Hunk Tracker keeps its settings and baselines in the editor's per-workspace extension storage (for VS Code on Windows, under `%APPDATA%\Code\User\workspaceStorage`), not in your project, so there is nothing to add to `.gitignore`. Each editor (VS Code, Insiders, Cursor) keeps its own copy. VS Code does not delete that storage when a project folder is deleted, so shortly after startup Hunk Tracker removes its own data for projects whose folder no longer exists (local folders only; it never touches project files or other extensions' data).
 - **Simpler UI.** Enable and Disable are buttons in the panel (Disable is under Settings), not Command Palette entries.
 
 ## Installation
