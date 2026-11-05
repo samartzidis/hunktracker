@@ -178,6 +178,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<{ getR
     vscode.commands.registerCommand('hunktracker.openSettings', () => {
       reviewPanel?.openSettings();
     }),
+    vscode.commands.registerCommand('hunktracker.openGitHub', () => {
+      void vscode.env.openExternal(vscode.Uri.parse('https://github.com/samartzidis/hunktracker'));
+    }),
     vscode.commands.registerCommand('hunktracker.refresh', async () => {
       if (!stateManager.enabled) return;
       reviewPanel?.setLoading(true);

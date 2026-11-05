@@ -63,6 +63,11 @@
         "icon": "$(settings-gear)"
       },
       {
+        "command": "hunktracker.openGitHub",
+        "title": "Hunk Tracker: Open Project on GitHub",
+        "icon": "$(github)"
+      },
+      {
         "command": "hunktracker.refresh",
         "title": "Hunk Tracker: Refresh State",
         "icon": "$(refresh)"
@@ -133,6 +138,11 @@
           "command": "hunktracker.openSettings",
           "when": "view == hunktrackerToolbar",
           "group": "navigation@4"
+        },
+        {
+          "command": "hunktracker.openGitHub",
+          "when": "view == hunktrackerToolbar",
+          "group": "navigation@5"
         }
       ]
     },
