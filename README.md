@@ -1,6 +1,6 @@
 # Hunk Tracker
 
-Review file changes made by other programs, such as AI coding assistants like [Claude Code](https://docs.anthropic.com/en/docs/claude-code), hunk by hunk. Changes show inline in the editor in red and green, each with an Accept / Discard bar.
+Review in-line file changes made by AI coding assistants like [Claude Code](https://docs.anthropic.com/en/docs/claude-code), hunk by hunk. Changes show inline in the editor in red and green, each with an Accept / Discard bar.
 
 ## Features
 
