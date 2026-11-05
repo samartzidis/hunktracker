@@ -18,6 +18,7 @@
     "src/hunktrackerGit.ts",
     "src/pathNormalize.ts",
     "src/progress.ts",
+    "src/ignorePatterns.ts",
     "src/storageCleanup.ts",
     "src/proposedApi.ts"
   ],

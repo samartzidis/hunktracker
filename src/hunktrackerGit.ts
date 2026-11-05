@@ -5,6 +5,7 @@ import { promisify } from 'util';
 import { normalizePath, toGitRelPath } from './pathNormalize';
 import { mkdirRetry, removeDirSync } from './fsUtil';
 import { mapLimit } from './concurrency';
+import { withoutBuiltInPatterns } from './ignorePatterns';
 
 const execFileAsync = promisify(execFile);
 
@@ -103,7 +104,7 @@ interface Settings {
 }
 
 const DEFAULT_SETTINGS: Settings = {
-  ignorePatterns: process.platform === 'darwin' ? ['.git', '.DS_Store'] : ['.git'],
+  ignorePatterns: [],
   respectGitignore: true,
   clearOnBranchSwitch: false,
   useDiffEditor: false,
@@ -222,7 +223,7 @@ export class HunktrackerGit {
       const raw = fs.readFileSync(this.settingsPath, 'utf-8');
       const parsed = JSON.parse(raw) as Partial<Settings>;
       return {
-        ignorePatterns: parsed.ignorePatterns ?? [...DEFAULT_SETTINGS.ignorePatterns],
+        ignorePatterns: withoutBuiltInPatterns(parsed.ignorePatterns ?? DEFAULT_SETTINGS.ignorePatterns),
         respectGitignore: parsed.respectGitignore ?? DEFAULT_SETTINGS.respectGitignore,
         clearOnBranchSwitch: parsed.clearOnBranchSwitch ?? DEFAULT_SETTINGS.clearOnBranchSwitch,
         useDiffEditor: typeof parsed.useDiffEditor === 'boolean'

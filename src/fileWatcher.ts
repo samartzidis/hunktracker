@@ -8,6 +8,7 @@ import { StateManager } from './stateManager';
 import { computeHunks } from './diffEngine';
 import { log } from './log';
 import { normalizePath } from './pathNormalize';
+import { isInsideDotGit } from './ignorePatterns';
 
 // Transform gitignore rules from a sub-directory so they work in a single
 // root-level matcher. Adds the directory's relative path as prefix, handling
@@ -277,7 +278,9 @@ export class FileWatcher {
     // returns false even though the pattern is meant to ignore that directory.
     if (isDirectory) relPath += '/';
 
-    if (this.userMatcherFor(this.stateManager.ignorePatterns).ignores(relPath)) return true;
+    if (isInsideDotGit(relPath)) return true;
+
+    if (this.userMatcherFor(this.stateManager.effectiveIgnorePatterns).ignores(relPath)) return true;
 
     if (this.stateManager.respectGitignore && this.gitignoreMatcher.ignores(relPath)) return true;
 

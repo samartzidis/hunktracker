@@ -6,6 +6,7 @@ import { HunktrackerGit } from './hunktrackerGit';
 import { log } from './log';
 import { normalizePath } from './pathNormalize';
 import { mapLimit } from './concurrency';
+import { mergeIgnorePatterns } from './ignorePatterns';
 import { ProgressReporter, type ProgressInfo } from './progress';
 
 /**
@@ -43,7 +44,8 @@ const DISK_READ_CONCURRENCY = 32;
 /** Baselines held in memory at once while classifying files that differ from them. */
 const BASELINE_CHUNK = 200;
 
-const DEFAULT_IGNORE_PATTERNS = process.platform === 'darwin' ? ['.git', '.DS_Store'] : ['.git'];
+// .git is excluded by the file watcher itself (see isInsideDotGit); a new project starts with no patterns
+const DEFAULT_IGNORE_PATTERNS: string[] = [];
 
 /** Format a list of absolute paths for logging: show relative paths, max 20. */
 function logFileList(files: string[], rootPath: string | undefined): string {
@@ -60,6 +62,7 @@ export class StateManager {
   private workspaceRoot: string | undefined;
   private _enabled: boolean = false;
   private _ignorePatterns: string[] = [...DEFAULT_IGNORE_PATTERNS];
+  private _globalIgnorePatterns: string[] = [];
   private _respectGitignore: boolean = true;
   private _clearOnBranchSwitch: boolean = false;
   private _useDiffEditor: boolean = false;
@@ -101,7 +104,13 @@ export class StateManager {
   // ── accessors ─────────────────────────────────────────────────────────────
 
   get enabled(): boolean { return this._enabled; }
+  /** This project's own exclude patterns (settings.json). */
   get ignorePatterns(): string[] { return this._ignorePatterns; }
+  /** Exclude patterns that apply to every project (user setting, kept in sync by the extension). */
+  get globalIgnorePatterns(): string[] { return this._globalIgnorePatterns; }
+  set globalIgnorePatterns(patterns: string[]) { this._globalIgnorePatterns = patterns; }
+  /** What file filtering actually uses: global patterns, then the project's. */
+  get effectiveIgnorePatterns(): string[] { return mergeIgnorePatterns(this._globalIgnorePatterns, this._ignorePatterns); }
   get respectGitignore(): boolean { return this._respectGitignore; }
   get clearOnBranchSwitch(): boolean { return this._clearOnBranchSwitch; }
   get useDiffEditor(): boolean { return this._useDiffEditor; }

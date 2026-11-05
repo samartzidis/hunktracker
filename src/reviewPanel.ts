@@ -8,7 +8,7 @@ import { sortFiles } from './fileOrder';
 import { computeStripMarks, countLines, type StripMark } from './changeStrip';
 import { log } from './log';
 import type { ApiStatus } from './proposedApi';
-import { getUserSetting, setUserSetting, getReturnToView, setReturnToView, type UserSettingKey } from './userSettings';
+import { getUserSetting, setUserSetting, getReturnToView, setReturnToView, setGlobalIgnorePatterns, type UserSettingKey } from './userSettings';
 import { collectReturnOptions, type ReturnOption } from './containerOptions';
 
 import {
@@ -25,6 +25,8 @@ interface PanelState {
   proposedApiStatus: ApiStatus;
   enabled: boolean;
   ignorePatterns: string[];
+  /** Patterns from the user-level setting, applied to every project. */
+  globalIgnorePatterns: string[];
   respectGitignore: boolean;
   clearOnBranchSwitch: boolean;
   autoAcceptOnStartup: boolean;
@@ -367,6 +369,7 @@ export class ReviewPanel implements vscode.WebviewViewProvider {
       proposedApiStatus: this.proposedApiStatus,
       enabled: this.stateManager.enabled,
       ignorePatterns: this.stateManager.ignorePatterns,
+      globalIgnorePatterns: this.stateManager.globalIgnorePatterns,
       respectGitignore: this.stateManager.respectGitignore,
       clearOnBranchSwitch: this.stateManager.clearOnBranchSwitch,
       autoAcceptOnStartup: getUserSetting('autoAcceptOnStartup'),
@@ -404,6 +407,10 @@ export class ReviewPanel implements vscode.WebviewViewProvider {
         if (msg.folders !== undefined) {
           await vscode.commands.executeCommand('hunktracker.setIgnorePatterns', msg.folders);
         }
+        break;
+      case 'setGlobalIgnorePatterns':
+        // The configuration change listener in extension.ts re-syncs tracked files
+        if (msg.folders !== undefined) await setGlobalIgnorePatterns(msg.folders);
         break;
       case 'setRespectGitignore':
         if (msg.value !== undefined) {

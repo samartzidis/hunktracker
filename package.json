@@ -40,6 +40,15 @@
           "scope": "application",
           "markdownDescription": "Used with `#hunktracker.autoRevealPanel#`. After the last pending change is handled and Hunk Tracker hides itself, open this pane again (a command ID such as `workbench.view.extension.<containerId>`). Nothing happens if Hunk Tracker could not hide. Easiest to set from the dropdown in the Hunk Tracker settings screen (gear icon). Empty means do nothing."
         },
+        "hunktracker.globalIgnorePatterns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "application",
+          "markdownDescription": "gitignore-style patterns excluded from change tracking in every project, merged with each project's own exclude patterns (set in the Hunk Tracker settings screen). A project can re-include something listed here with a `!pattern` line of its own."
+        },
         "hunktracker.autoRevealPanel": {
           "type": "boolean",
           "default": false,

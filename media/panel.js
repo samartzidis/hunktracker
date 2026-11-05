@@ -3,7 +3,7 @@
 const vscode = /** @type {any} */ (globalThis).acquireVsCodeApi();
 const app = document.getElementById('app');
 
-/** @type {{ proposedApiStatus: 'available' | 'blocked' | 'missing', enabled: boolean, ignorePatterns: string[], respectGitignore: boolean, clearOnBranchSwitch: boolean, autoAcceptOnStartup: boolean, autoRevealPanel: boolean, returnToView: string, returnViewOptions: { id: string, label: string, info: string }[], useDiffEditor: boolean, showInlineDecorations: boolean, totalFiles: number, totalAdded: number, totalRemoved: number, files: any[] } | null} */
+/** @type {{ proposedApiStatus: 'available' | 'blocked' | 'missing', enabled: boolean, ignorePatterns: string[], globalIgnorePatterns: string[], respectGitignore: boolean, clearOnBranchSwitch: boolean, autoAcceptOnStartup: boolean, autoRevealPanel: boolean, returnToView: string, returnViewOptions: { id: string, label: string, info: string }[], useDiffEditor: boolean, showInlineDecorations: boolean, totalFiles: number, totalAdded: number, totalRemoved: number, files: any[] } | null} */
 let currentState = null;
 /** @type {Set<string>} */
 const expandedFiles = new Set();
@@ -11,6 +11,8 @@ const expandedFiles = new Set();
 let view = 'main';
 /** Track whether we are currently in loading state, so the next update can fade in */
 let isLoading = false;
+/** The "Global scoped" checkbox next to the exclude pattern input; kept across re-renders */
+let addGlobalPattern = false;
 
 // Logo image (media/logo.svg), URI injected by reviewPanel.getHtml via <body data-logo>
 const LOGO_URI = document.body.dataset.logo || '';
@@ -57,7 +59,7 @@ function appendIcon(parent) {
 }
 
 /**
- * @param {{ proposedApiStatus: 'available' | 'blocked' | 'missing', enabled: boolean, ignorePatterns: string[], respectGitignore: boolean, clearOnBranchSwitch: boolean, autoAcceptOnStartup: boolean, autoRevealPanel: boolean, returnToView: string, returnViewOptions: { id: string, label: string, info: string }[], useDiffEditor: boolean, showInlineDecorations: boolean, totalFiles: number, totalAdded: number, totalRemoved: number, files: any[] }} state
+ * @param {{ proposedApiStatus: 'available' | 'blocked' | 'missing', enabled: boolean, ignorePatterns: string[], globalIgnorePatterns: string[], respectGitignore: boolean, clearOnBranchSwitch: boolean, autoAcceptOnStartup: boolean, autoRevealPanel: boolean, returnToView: string, returnViewOptions: { id: string, label: string, info: string }[], useDiffEditor: boolean, showInlineDecorations: boolean, totalFiles: number, totalAdded: number, totalRemoved: number, files: any[] }} state
  */
 function render(state) {
   if (!app) return;
@@ -153,7 +155,7 @@ function renderIdleScreen() {
 }
 
 /**
- * @param {{ ignorePatterns: string[], respectGitignore: boolean, clearOnBranchSwitch: boolean, autoAcceptOnStartup: boolean, autoRevealPanel: boolean, returnToView: string, returnViewOptions: { id: string, label: string, info: string }[], useDiffEditor: boolean, showInlineDecorations: boolean }} state
+ * @param {{ ignorePatterns: string[], globalIgnorePatterns: string[], respectGitignore: boolean, clearOnBranchSwitch: boolean, autoAcceptOnStartup: boolean, autoRevealPanel: boolean, returnToView: string, returnViewOptions: { id: string, label: string, info: string }[], useDiffEditor: boolean, showInlineDecorations: boolean }} state
  */
 function renderSettingsScreen(state) {
   if (!app) return;
@@ -323,24 +325,40 @@ function renderSettingsScreen(state) {
   // ── Exclude Patterns ──
   const patternSection = el('div', 'settings-section');
   patternSection.appendChild(el('div', 'settings-section-title', 'Exclude Patterns'));
-  patternSection.appendChild(el('p', 'settings-section-desc', 'gitignore-style patterns to exclude from change tracking (relative to workspace root).'));
+  patternSection.appendChild(el('p', 'settings-section-desc', 'gitignore-style patterns to exclude from change tracking (relative to workspace root). .git folders are always excluded. Global patterns apply to every project and are merged with this project\'s own.'));
 
   const patternList = el('div', 'pattern-list');
+  const globalPatterns = state.globalIgnorePatterns || [];
 
-  for (const folder of state.ignorePatterns) {
+  /**
+   * @param {string} pattern
+   * @param {boolean} isGlobal
+   */
+  const patternRow = (pattern, isGlobal) => {
     const inner = el('div', 'pattern-row-inner');
-    const folderEl = el('span', 'pattern-text', folder);
+    inner.appendChild(el('span', 'pattern-text', pattern));
+    if (isGlobal) {
+      const tag = el('span', 'pattern-scope', 'global');
+      tag.title = 'Applies to every project (user setting hunktracker.globalIgnorePatterns)';
+      inner.appendChild(tag);
+    }
     const delBtn = el('button', 'pattern-del', '');
-    delBtn.title = 'Remove';
+    delBtn.title = isGlobal ? 'Remove from all projects' : 'Remove';
     delBtn.addEventListener('click', e => {
       e.stopPropagation();
-      const newFolders = state.ignorePatterns.filter(f => f !== folder);
-      vscode.postMessage({ command: 'setIgnorePatterns', folders: newFolders });
+      if (isGlobal) {
+        vscode.postMessage({ command: 'setGlobalIgnorePatterns', folders: globalPatterns.filter(f => f !== pattern) });
+      } else {
+        vscode.postMessage({ command: 'setIgnorePatterns', folders: state.ignorePatterns.filter(f => f !== pattern) });
+      }
     });
-    inner.appendChild(folderEl);
     inner.appendChild(delBtn);
-    patternList.appendChild(inner);
-  }
+    return inner;
+  };
+
+  // Global first: that is also the order they are applied in, so a project line can re-include with "!"
+  for (const pattern of globalPatterns) patternList.appendChild(patternRow(pattern, true));
+  for (const pattern of state.ignorePatterns) patternList.appendChild(patternRow(pattern, false));
 
   const addRow = el('div', 'pattern-add-row');
   const addInput = /** @type {HTMLInputElement} */ (document.createElement('input'));
@@ -351,8 +369,14 @@ function renderSettingsScreen(state) {
   addBtn.addEventListener('click', e => {
     e.stopPropagation();
     const val = addInput.value.trim();
-    if (val && !state.ignorePatterns.includes(val)) {
-      vscode.postMessage({ command: 'setIgnorePatterns', folders: [...state.ignorePatterns, val] });
+    if (val) {
+      if (addGlobalPattern) {
+        if (!globalPatterns.includes(val)) {
+          vscode.postMessage({ command: 'setGlobalIgnorePatterns', folders: [...globalPatterns, val] });
+        }
+      } else if (!state.ignorePatterns.includes(val)) {
+        vscode.postMessage({ command: 'setIgnorePatterns', folders: [...state.ignorePatterns, val] });
+      }
     }
     addInput.value = '';
   });
@@ -360,6 +384,17 @@ function renderSettingsScreen(state) {
   addRow.appendChild(addInput);
   addRow.appendChild(addBtn);
   patternList.appendChild(addRow);
+
+  const scopeRow = el('label', 'pattern-scope-row');
+  scopeRow.title = 'Ticked: the next pattern you add applies to every project. Unticked: only to this project.';
+  const scopeCheckbox = /** @type {HTMLInputElement} */ (document.createElement('input'));
+  scopeCheckbox.type = 'checkbox';
+  scopeCheckbox.className = 'settings-checkbox';
+  scopeCheckbox.checked = addGlobalPattern;
+  scopeCheckbox.addEventListener('change', () => { addGlobalPattern = scopeCheckbox.checked; });
+  scopeRow.appendChild(scopeCheckbox);
+  scopeRow.appendChild(el('span', 'settings-check-desc', 'Global scoped'));
+  patternList.appendChild(scopeRow);
   patternSection.appendChild(patternList);
   body.appendChild(appearanceSection);
   body.appendChild(patternSection);
@@ -420,7 +455,7 @@ function fileIconBadge(fileName) {
 }
 
 /**
- * @param {{ enabled: boolean, ignorePatterns: string[], totalFiles: number, totalAdded: number, totalRemoved: number, files: any[] }} state
+ * @param {{ enabled: boolean, ignorePatterns: string[], globalIgnorePatterns: string[], totalFiles: number, totalAdded: number, totalRemoved: number, files: any[] }} state
  */
 function renderReviewScreen(state) {
   if (!app) return;

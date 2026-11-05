@@ -59,7 +59,7 @@ suite('hunktracker lifecycle integration', function () {
 
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
     assert.ok(Array.isArray(settings.ignorePatterns), 'Settings should have ignorePatterns');
-    assert.ok(settings.ignorePatterns.includes('.git'), '.git should be in default ignorePatterns');
+    assert.deepStrictEqual(settings.ignorePatterns, [], '.git is built in, so a new project starts with no patterns');
     assert.strictEqual(settings.respectGitignore, true, 'respectGitignore should default to true');
 
     // Data lives in extension storage, never inside the project
@@ -121,11 +121,11 @@ suite('hunktracker lifecycle integration', function () {
 
     await enableHunktracker();
 
-    await vscode.commands.executeCommand('hunktracker.setIgnorePatterns', ['.git', 'node_modules', '*.tmp']);
+    await vscode.commands.executeCommand('hunktracker.setIgnorePatterns', ['node_modules', '*.tmp']);
     await sleep(200);
 
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
-    assert.deepStrictEqual(settings.ignorePatterns, ['.git', 'node_modules', '*.tmp']);
+    assert.deepStrictEqual(settings.ignorePatterns, ['node_modules', '*.tmp']);
   });
 
   test('setRespectGitignore persists to settings.json', async () => {

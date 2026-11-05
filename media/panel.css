@@ -305,13 +305,13 @@ body {
 .pattern-list {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 0;
 }
 
 .pattern-row-inner {
   display: flex;
   align-items: center;
-  height: 26px;
+  height: 20px;
   border-radius: 3px;
   padding: 0 2px 0 8px;
   gap: 2px;
@@ -376,6 +376,25 @@ body {
   align-items: center;
   gap: 6px;
   margin-top: 8px;
+}
+
+.pattern-scope {
+  flex-shrink: 0;
+  font-size: 9px;
+  line-height: 14px;
+  padding: 0 5px;
+  border-radius: 7px;
+  color: var(--vscode-badge-foreground);
+  background: var(--vscode-badge-background);
+  opacity: 0.85;
+}
+
+.pattern-scope-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 6px;
+  cursor: pointer;
 }
 
 .pattern-input {

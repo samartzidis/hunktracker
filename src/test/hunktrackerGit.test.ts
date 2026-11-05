@@ -319,9 +319,16 @@ describe('HunktrackerGit', () => {
       const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'hunktracker-settings-'));
       const g2 = new HunktrackerGit(path.join(dir2, '.vscode', 'hunktracker'), dir2);
       const s = g2.loadSettings();
-      const expectedDefaults = process.platform === 'darwin' ? ['.git', '.DS_Store'] : ['.git'];
-      assert.deepEqual(s.ignorePatterns, expectedDefaults);
+      assert.deepEqual(s.ignorePatterns, []);
       assert.equal(s.respectGitignore, true);
+      fs.rmSync(dir2, { recursive: true, force: true });
+    });
+
+    it('drops a stored .git pattern: it is built in now', () => {
+      const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'hunktracker-settings3-'));
+      const g2 = new HunktrackerGit(path.join(dir2, '.vscode', 'hunktracker'), dir2);
+      g2.saveSettings({ ignorePatterns: ['.git', 'dist'], respectGitignore: true, clearOnBranchSwitch: false, useDiffEditor: false, showInlineDecorations: true });
+      assert.deepEqual(g2.loadSettings().ignorePatterns, ['dist']);
       fs.rmSync(dir2, { recursive: true, force: true });
     });
 
