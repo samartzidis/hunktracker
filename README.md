@@ -2,11 +2,9 @@
 
 Review in-line file changes made in Visual Studio Code by AI coding assistants like [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Every changed block gets its own Accept and Discard bar inline in the editor.
 
-![Hunk Tracker next to Claude Code: changes shown inline in red and green with Accept and Discard bars, and the list of changed files below the chat](docs/screenshot.png =640x)
-
 ## Features
 
-Hunk Tracker is based on the [molon/hunkwise](https://github.com/molon/hunkwise) extension, offering improvements and additional features such as:
+Hunk Tracker is based on the [molon/hunkwise](https://github.com/molon/hunkwise) extension with performance improvements and additional features such as:
 
 - **Performance Improvements.** Large projects open without freezing, enabling takes seconds (a 1 GB project in about 6 seconds).
 
