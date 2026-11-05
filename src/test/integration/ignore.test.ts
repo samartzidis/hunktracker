@@ -4,7 +4,7 @@ import * as path from 'path';
 import assert from 'assert';
 import { execSync } from 'child_process';
 import {
-  getWorkspaceRoot, hunktrackerGitEnv, gitListTracked,
+  getWorkspaceRoot, getDataDir, hunktrackerGitEnv, gitListTracked,
   sleep, waitForCondition, enableHunktracker, disableHunktracker,
   writeFileExternally, writeFileViaVSCode, cleanWorkspace,
   relPath,
@@ -170,7 +170,7 @@ suite('hunktracker ignore/gitignore integration', function () {
 
   test('ignorePatterns changed externally in settings.json triggers sync on reload', async () => {
     const root = getWorkspaceRoot();
-    const settingsPath = path.join(root, '.vscode', 'hunktracker', 'settings.json');
+    const settingsPath = path.join(getDataDir(), 'settings.json');
 
     // Create files
     const ignoredFile = path.join(root, 'logs', 'app.log');

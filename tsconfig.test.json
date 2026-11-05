@@ -11,11 +11,13 @@
   },
   "include": [
     "src/test/**/*.ts",
+    "src/changeStrip.ts",
     "src/containerOptions.ts",
     "src/diffEngine.ts",
     "src/fileOrder.ts",
     "src/hunktrackerGit.ts",
     "src/pathNormalize.ts",
+    "src/storageCleanup.ts",
     "src/proposedApi.ts"
   ],
   "exclude": [

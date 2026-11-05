@@ -31,10 +31,17 @@ export function getWorkspaceRoot(): string {
   return folders[0].uri.fsPath;
 }
 
+/** The extension's per-workspace data dir (context.storageUri): holds settings.json and git/. */
+export function getDataDir(): string {
+  const dir = getStateManager()?.dir;
+  if (!dir) throw new Error('extension has no data dir (not activated, or no folder open)');
+  return dir;
+}
+
 export function hunktrackerGitEnv(root: string): NodeJS.ProcessEnv {
   return {
     ...process.env,
-    GIT_DIR: path.join(root, '.vscode', 'hunktracker', 'git'),
+    GIT_DIR: path.join(getDataDir(), 'git'),
     GIT_WORK_TREE: root,
     GIT_TERMINAL_PROMPT: '0',
   };
@@ -84,8 +91,7 @@ export async function enableHunktracker(): Promise<void> {
   // (files entered as "new" with no baseline). Let them land while still disabled.
   await sleep(500);
   await vscode.commands.executeCommand('hunktracker.enable');
-  const root = getWorkspaceRoot();
-  const gitDir = path.join(root, '.vscode', 'hunktracker', 'git');
+  const gitDir = path.join(getDataDir(), 'git');
   await waitForCondition(() => fs.existsSync(gitDir));
   await sleep(200);
 }
@@ -97,7 +103,7 @@ export async function disableHunktracker(): Promise<void> {
     try { await sm.flush(); } catch { /* ignore */ }
   }
   await vscode.commands.executeCommand('hunktracker.disable');
-  const gitDir = path.join(getWorkspaceRoot(), '.vscode', 'hunktracker', 'git');
+  const gitDir = path.join(getDataDir(), 'git');
   try {
     await waitForCondition(() => !fs.existsSync(gitDir), 5000, 50);
   } catch (e) {
@@ -147,8 +153,8 @@ export async function cleanWorkspace(): Promise<void> {
     if (entry === '.vscode' || entry === '.gitkeep' || entry === '.git') continue;
     removeDirSync(path.join(root, entry));
   }
-  const hunktrackerDir = path.join(root, '.vscode', 'hunktracker');
-  if (fs.existsSync(hunktrackerDir)) {
+  const hunktrackerDir = getStateManager()?.dir as string | undefined;
+  if (hunktrackerDir && fs.existsSync(hunktrackerDir)) {
     removeDirSync(hunktrackerDir);
   }
   // settings.json is gone, so drop the in-memory settings the previous test left behind too.

@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 
 /**
  * Plugin-wide (user-level) settings, stored in VS Code's own settings rather than
- * in a project's `.vscode/hunktracker/settings.json`. Both are declared in
+ * in a project's `settings.json` (in the extension's per-workspace storage). Both are declared in
  * package.json with `"scope": "application"`, so they apply to every project and
  * cannot be overridden per workspace.
  */

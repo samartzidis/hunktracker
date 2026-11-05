@@ -242,6 +242,11 @@ export class FileWatcher {
     const rootPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (!rootPath) return false;
 
+    // Data used to live in <root>/.vscode/hunktracker/ before it moved to extension storage.
+    // A leftover folder there holds a whole git repo; never track it.
+    const legacyDir = path.join(rootPath, '.vscode', 'hunktracker');
+    if (filePath === legacyDir || filePath.startsWith(legacyDir + path.sep)) return true;
+
     // Only the first workspace folder is tracked (baselines live in one repo
     // rooted there), so anything outside it is out of scope.
     const fromRoot = path.relative(rootPath, filePath);

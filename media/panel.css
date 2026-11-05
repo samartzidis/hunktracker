@@ -529,12 +529,40 @@ body {
   align-items: center;
   gap: 3px;
   min-width: 56px;
-  justify-content: flex-end;
+  /* Left-aligned so the numbers sit right next to the strip before them; the box keeps its
+     minimum width so the buttons after it still line up across rows. */
+  justify-content: flex-start;
 }
 
 .file-actions {
   display: flex;
   gap: 0;
+}
+
+/* Overview strip: the whole file as a thin bar, one mark per pending change */
+.file-strip {
+  position: relative;
+  width: 44px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 2px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--vscode-foreground) 12%, transparent);
+}
+.strip-mark {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  min-width: 2px;
+  pointer-events: none;
+}
+.strip-added { background: #3fb950; }
+.strip-removed { background: #f85149; }
+/* both removed and added lines: top half red, bottom half green */
+.strip-changed { background: linear-gradient(#f85149 50%, #3fb950 50%); }
+/* No room in a narrow side bar: drop the strip rather than squeeze the file name */
+@media (max-width: 260px) {
+  .file-strip { display: none; }
 }
 
 /* ── Action buttons ── */

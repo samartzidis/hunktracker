@@ -327,12 +327,6 @@ function renderSettingsScreen(state) {
 
   const patternList = el('div', 'pattern-list');
 
-  // Protected system rule — always enforced, cannot be removed
-  const protectedRow = el('div', 'pattern-row-inner pattern-row-protected');
-  protectedRow.appendChild(el('span', 'pattern-text', '.vscode/hunktracker'));
-  protectedRow.appendChild(el('span', 'pattern-lock', '🔒'));
-  patternList.appendChild(protectedRow);
-
   for (const folder of state.ignorePatterns) {
     const inner = el('div', 'pattern-row-inner');
     const folderEl = el('span', 'pattern-text', folder);
@@ -451,7 +445,28 @@ function renderReviewScreen(state) {
 }
 
 /**
- * @param {{ filePath: string, fileName: string, dirName: string, addedLines: number, removedLines: number, pendingCount: number, isNew: boolean, isDeleted: boolean, hunks: any[] }} file
+ * Thin bar standing for the whole file, with a mark where each pending change sits.
+ * Purely visual: the marks ignore the pointer, so a click on the strip is a click on the row.
+ * @param {{ totalLines: number, pendingCount: number, strip: { start: number, end: number, kind: string }[], isNew: boolean, isDeleted: boolean }} file
+ */
+function changeStrip(file) {
+  const strip = el('div', 'file-strip');
+  for (const m of file.strip || []) {
+    const mark = el('span', `strip-mark strip-${m.kind}`);
+    // min() keeps a zero-width mark at the very end of the file inside the bar
+    mark.style.left = `min(${(m.start * 100).toFixed(2)}%, calc(100% - 2px))`;
+    mark.style.width = `${((m.end - m.start) * 100).toFixed(2)}%`;
+    strip.appendChild(mark);
+  }
+  const lines = file.totalLines === 1 ? '1 line' : `${file.totalLines} lines`;
+  strip.title = file.isDeleted ? `Deleted file (${lines})`
+    : file.isNew ? `New file (${lines})`
+    : `${file.pendingCount} change${file.pendingCount === 1 ? '' : 's'} in ${lines}`;
+  return strip;
+}
+
+/**
+ * @param {{ filePath: string, fileName: string, dirName: string, addedLines: number, removedLines: number, pendingCount: number, totalLines: number, strip: { start: number, end: number, kind: string }[], isNew: boolean, isDeleted: boolean, hunks: any[] }} file
  */
 function renderFileGroup(file) {
   const isSpecial = file.isNew || file.isDeleted;
@@ -508,6 +523,7 @@ function renderFileGroup(file) {
   fileActions.appendChild(keepBtn);
   fileActions.appendChild(undoBtn);
 
+  right.appendChild(changeStrip(file));
   right.appendChild(stats);
   right.appendChild(fileActions);
 

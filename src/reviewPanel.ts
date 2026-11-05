@@ -5,6 +5,7 @@ import { StateManager } from './stateManager';
 import { FileWatcher } from './fileWatcher';
 import { computeHunks, hunkId } from './diffEngine';
 import { sortFiles } from './fileOrder';
+import { computeStripMarks, countLines, type StripMark } from './changeStrip';
 import { log } from './log';
 import type { ApiStatus } from './proposedApi';
 import { getUserSetting, setUserSetting, getReturnToView, setReturnToView, type UserSettingKey } from './userSettings';
@@ -46,6 +47,10 @@ interface PanelFile {
   addedLines: number;
   removedLines: number;
   pendingCount: number;
+  /** Lines in the file now (baseline lines for a deleted file): the scale of `strip`. */
+  totalLines: number;
+  /** Where the pending changes sit in the file, for the row's overview strip. */
+  strip: StripMark[];
   isNew: boolean;
   isDeleted: boolean;
   hunks: PanelHunk[];
@@ -309,6 +314,7 @@ export class ReviewPanel implements vscode.WebviewViewProvider {
       // and deleted files (file missing from disk) so accept/discard remain available.
       if (pendingHunks.length === 0 && !isNew && !isDeleted) continue;
 
+      const totalLines = countLines(isDeleted ? (fileState.baseline ?? '') : currentContent);
       const addedLines = pendingHunks.reduce((s, h) => s + h.newLines, 0);
       const removedLines = pendingHunks.reduce((s, h) => s + h.oldLines, 0);
       totalAdded += addedLines;
@@ -327,6 +333,8 @@ export class ReviewPanel implements vscode.WebviewViewProvider {
         addedLines,
         removedLines,
         pendingCount: pendingHunks.length,
+        totalLines,
+        strip: computeStripMarks(pendingHunks, totalLines, isDeleted),
         isNew,
         isDeleted,
         hunks: pendingHunks.map(h => ({

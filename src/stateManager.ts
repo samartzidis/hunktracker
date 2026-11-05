@@ -40,11 +40,16 @@ export class StateManager {
   // Set by the extension to trigger UI refresh after unexpected state restoration.
   onRollback: (() => void) | undefined;
 
-  constructor() {
+  /**
+   * @param dataDir Per-workspace directory for settings.json and the private baseline repo
+   *                (the extension's `context.storageUri`, outside the project). Undefined when
+   *                the window has no folder or no storage, in which case nothing is tracked.
+   */
+  constructor(dataDir?: string) {
     const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (workspaceFolders && workspaceFolders.length > 0) {
+    if (workspaceFolders && workspaceFolders.length > 0 && dataDir) {
       this.workspaceRoot = workspaceFolders[0].uri.fsPath;
-      this.hunktrackerDir = path.join(this.workspaceRoot, '.vscode', 'hunktracker');
+      this.hunktrackerDir = dataDir;
     }
   }
 
