@@ -1,0 +1,147 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "type": "npm",
+      "script": "compile",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "silent"
+      },
+      "problemMatcher": "$tsc"
+    },
+    {
+      "label": "Install dependencies",
+      "type": "npm",
+      "script": "install",
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Clean",
+      "type": "npm",
+      "script": "clean",
+      "group": "build",
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Clean All (incl. node_modules and .vscode-test)",
+      "type": "npm",
+      "script": "clean:all",
+      "group": "build",
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "type": "npm",
+      "script": "watch",
+      "group": "build",
+      "isBackground": true,
+      "presentation": {
+        "reveal": "silent"
+      },
+      "problemMatcher": "$tsc-watch"
+    },
+    {
+      "label": "Test: Unit tests",
+      "type": "npm",
+      "script": "test",
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": "$tsc"
+    },
+    {
+      "label": "Extension: Launch Development Host",
+      "dependsOn": ["npm: compile"],
+      "type": "shell",
+      "command": "code",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}",
+        "--enable-proposed-api=GeorgeSamartzidis.hunktracker",
+        "${workspaceFolder}/../hunktracker-demo/"
+      ],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "Extension: Launch Development Host (clean profile)",
+      "dependsOn": ["npm: compile", "npm: dev:clean-profile"],
+      "dependsOrder": "sequence",
+      "type": "shell",
+      "command": "code",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}",
+        "--enable-proposed-api=GeorgeSamartzidis.hunktracker",
+        "--user-data-dir=${env:TEMP}\\hunktracker-dev-profile",
+        "--skip-welcome",
+        "--skip-release-notes",
+        "--disable-workspace-trust",
+        "${workspaceFolder}/../hunktracker-demo/"
+      ],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "Extension: Pack VSIX",
+      "type": "npm",
+      "script": "package",
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "focus": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Extension: Install VSIX",
+      "dependsOn": ["Extension: Pack VSIX"],
+      "dependsOrder": "sequence",
+      "type": "npm",
+      "script": "install:vsix",
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Extension: Uninstall VSIX",
+      "type": "npm",
+      "script": "uninstall:vsix",
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    }
+  ]
+}

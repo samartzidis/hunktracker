@@ -1,0 +1,12 @@
+out/
+out-test/
+out-integration/
+.vscode-test/
+node_modules/
+.vscode/hunktracker/
+*.vsix
+src/test/integration/workspace/
+.DS_Store
+**/.claude/*
+!/.claude/commands/
+.memory

@@ -1,0 +1,13 @@
+import * as vscode from 'vscode';
+
+let channel: vscode.OutputChannel | undefined;
+
+export function initLog(): void {
+  if (!channel) {
+    channel = vscode.window.createOutputChannel('Hunk Tracker');
+  }
+}
+
+export function log(message: string): void {
+  channel?.appendLine(`[${new Date().toISOString()}] ${message}`);
+}

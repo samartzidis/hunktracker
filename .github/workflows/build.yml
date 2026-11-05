@@ -1,0 +1,221 @@
+name: Build, Test & Release
+
+# Two ways in (the repo name is never checked):
+#  - "Run workflow": build and test, optionally release by hand.
+#  - A push to main: build, test and, if the version in package.json has no
+#    release yet (no v<version> tag), release it automatically. The release
+#    notes are the message bodies of the commits on main since the previous
+#    release tag: each squash-merged dev -> main PR carries its notes there
+#    (see the /push-main command), so pushes that did not release still reach
+#    the next release's notes.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Also create a GitHub Release with the built VSIX, using the version already in package.json. Leave unchecked to only build and test.'
+        required: false
+        type: boolean
+        default: false
+      release_notes:
+        description: 'Release notes (used only when "release" is checked). Empty = the version number.'
+        required: false
+        type: string
+        default: ''
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Check: decides what this run does. Manual runs always build; "release"
+  # follows the input. A push builds and releases only when the package.json
+  # version has no v<version> tag yet.
+  # ---------------------------------------------------------------------------
+  check:
+    runs-on: ubuntu-latest
+    name: Check version
+
+    outputs:
+      version: ${{ steps.decide.outputs.version }}
+      build: ${{ steps.decide.outputs.build }}
+      release: ${{ steps.decide.outputs.release }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Decide
+        id: decide
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          RELEASE_INPUT: ${{ inputs.release }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if [ -z "$VERSION" ]; then
+            echo "Could not read the version from package.json." >&2
+            exit 1
+          fi
+          BUILD=true
+          RELEASE=false
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            RELEASE="$RELEASE_INPUT"
+          elif gh api "repos/$REPO/git/refs/tags/v$VERSION" >/dev/null 2>&1; then
+            echo "v$VERSION is already released - nothing to do."
+            BUILD=false
+          else
+            echo "v$VERSION has no release yet - building and releasing it."
+            RELEASE=true
+          fi
+          {
+            echo "version=$VERSION"
+            echo "build=$BUILD"
+            echo "release=$RELEASE"
+          } >> "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------------------
+  # Test: compiles and runs the unit tests. The integration suite (needs a
+  # downloaded VS Code, ~4.4 min) is not run here.
+  # ---------------------------------------------------------------------------
+  test:
+    needs: check
+    if: needs.check.outputs.build == 'true'
+    runs-on: windows-latest
+    name: Test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: npm ci
+        run: npm ci
+
+      - name: Unit tests
+        run: npm test
+
+  # ---------------------------------------------------------------------------
+  # Pack: build the VSIX. The package.json version is the single source of
+  # truth - no tag or version is typed in by hand; the release tag (when
+  # releasing) is derived from it.
+  # ---------------------------------------------------------------------------
+  pack:
+    needs: [check, test]
+    if: needs.check.outputs.build == 'true'
+    runs-on: windows-latest
+    name: Pack
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: npm ci
+        run: npm ci
+
+      - name: Fail if this version was already released
+        if: needs.check.outputs.release == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v${{ needs.check.outputs.version }}"
+          if gh api "repos/${{ github.repository }}/git/refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists - bump the version in package.json before releasing." >&2
+            exit 1
+          fi
+
+      - name: Package VSIX
+        run: npm run package
+
+      - name: Upload VSIX
+        uses: actions/upload-artifact@v7
+        with:
+          name: vsix
+          path: hunktracker-${{ needs.check.outputs.version }}.vsix
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Release: create the GitHub Release (tag derived from the version above,
+  # created automatically since it doesn't exist yet) and attach the VSIX -
+  # only when the check job decided to release. Release notes: the typed
+  # input of a manual run, else the message bodies of the commits since the
+  # previous release tag, else just the version number.
+  # ---------------------------------------------------------------------------
+  release:
+    needs: [check, pack]
+    if: needs.check.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    name: Release
+    permissions:
+      contents: write   # to create the GitHub Release
+
+    env:
+      TAG: v${{ needs.check.outputs.version }}
+
+    steps:
+      # Full history and tags, to find the previous release. Checkout first:
+      # it wipes the workspace, which would delete the downloaded VSIX.
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Download VSIX
+        uses: actions/download-artifact@v8
+        with:
+          name: vsix
+          path: dist
+
+      # The typed notes reach the script through env, never spliced into it.
+      - name: Release notes
+        id: notes
+        shell: bash
+        env:
+          TYPED: ${{ inputs.release_notes }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          if [ -n "$TYPED" ]; then
+            NOTES="$TYPED"
+          else
+            # Bodies (subject lines dropped) of the commits since the previous release tag, oldest
+            # first, blank runs squeezed; without a previous tag, just the latest commit's.
+            PREVIOUS=$(git describe --tags --abbrev=0 --match 'v*' HEAD 2>/dev/null || true)
+            if [ -n "$PREVIOUS" ]; then
+              BODIES=$(git log --reverse --first-parent --format='%b%n' "$PREVIOUS..HEAD")
+            else
+              BODIES=$(git log -1 --format='%b')
+            fi
+            NOTES=$(printf '%s\n' "$BODIES" | cat -s | sed '/./,$!d')
+          fi
+          [ -n "$NOTES" ] || NOTES="$VERSION"
+          {
+            echo 'notes<<END_OF_RELEASE_NOTES'
+            printf '%s\n' "$NOTES"
+            echo 'END_OF_RELEASE_NOTES'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ env.TAG }}
+          name: Release ${{ env.TAG }}
+          files: dist/*
+          fail_on_unmatched_files: true
+          body: ${{ steps.notes.outputs.notes }}

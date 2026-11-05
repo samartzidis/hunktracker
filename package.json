@@ -1,0 +1,184 @@
+{
+  "name": "hunktracker",
+  "publisher": "GeorgeSamartzidis",
+  "author": "George Samartzidis",
+  "displayName": "Hunk Tracker",
+  "description": "Per-hunk Accept/Discard for any file change",
+  "version": "1.0.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/samartzidis/hunktracker"
+  },
+  "engines": {
+    "vscode": "^1.106.0"
+  },
+  "enabledApiProposals": [
+    "editorInsets"
+  ],
+  "icon": "media/icon.png",
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "Hunk Tracker",
+      "properties": {
+        "hunktracker.autoAcceptOnStartup": {
+          "type": "boolean",
+          "default": false,
+          "scope": "application",
+          "markdownDescription": "When VS Code opens a workspace that has Hunk Tracker enabled, accept all changes left pending from the previous session instead of listing them. Applies to all projects."
+        },
+        "hunktracker.returnToView": {
+          "type": "string",
+          "default": "",
+          "scope": "application",
+          "markdownDescription": "Used with `#hunktracker.autoRevealPanel#`. After the last pending change is handled and Hunk Tracker hides itself, open this pane again (a command ID such as `workbench.view.extension.<containerId>`). Nothing happens if Hunk Tracker could not hide. Easiest to set from the dropdown in the Hunk Tracker settings screen (gear icon). Empty means do nothing."
+        },
+        "hunktracker.autoRevealPanel": {
+          "type": "boolean",
+          "default": false,
+          "scope": "application",
+          "markdownDescription": "When a file gets new pending changes, bring the Hunk Tracker view up without taking keyboard focus, and hide it again when nothing is pending. Applies to all projects. Meant for a side-bar layout (the default is the right-hand side bar); in the bottom panel it would switch away from the Terminal tab. See also `#hunktracker.returnToView#`."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "hunktracker.enable",
+        "title": "Hunk Tracker: Enable"
+      },
+      {
+        "command": "hunktracker.disable",
+        "title": "Hunk Tracker: Disable"
+      },
+      {
+        "command": "hunktracker.openSettings",
+        "title": "Hunk Tracker: Settings",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "hunktracker.refresh",
+        "title": "Hunk Tracker: Refresh State",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "hunktracker.prevHunk",
+        "title": "Hunk Tracker: Previous Hunk",
+        "icon": "$(chevron-left)"
+      },
+      {
+        "command": "hunktracker.nextHunk",
+        "title": "Hunk Tracker: Next Hunk",
+        "icon": "$(chevron-right)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "hunktracker.prevHunk",
+        "key": "alt+,",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "hunktracker.nextHunk",
+        "key": "alt+.",
+        "when": "editorTextFocus"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "hunktracker.enable",
+          "when": "false"
+        },
+        {
+          "command": "hunktracker.disable",
+          "when": "false"
+        },
+        {
+          "command": "hunktracker.prevHunk",
+          "when": "false"
+        },
+        {
+          "command": "hunktracker.nextHunk",
+          "when": "false"
+        },
+        {
+          "command": "hunktracker.refresh",
+          "when": "false"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "hunktracker.prevHunk",
+          "when": "view == hunktrackerToolbar",
+          "group": "navigation@1"
+        },
+        {
+          "command": "hunktracker.nextHunk",
+          "when": "view == hunktrackerToolbar",
+          "group": "navigation@2"
+        },
+        {
+          "command": "hunktracker.refresh",
+          "when": "view == hunktrackerToolbar",
+          "group": "navigation@3"
+        },
+        {
+          "command": "hunktracker.openSettings",
+          "when": "view == hunktrackerToolbar",
+          "group": "navigation@4"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "secondarySidebar": [
+        {
+          "id": "hunktrackerPanel",
+          "title": "Hunk Tracker",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "hunktrackerPanel": [
+        {
+          "id": "hunktrackerToolbar",
+          "name": "Hunk Tracker",
+          "type": "webview"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "clean": "node -e \"const fs=require('fs');for(const d of ['out','out-test','out-integration'])fs.rmSync(d,{recursive:true,force:true});for(const f of fs.readdirSync('.'))if(f.endsWith('.vsix'))fs.rmSync(f)\"",
+    "clean:all": "npm run clean && node -e \"for(const d of ['node_modules','.vscode-test'])require('fs').rmSync(d,{recursive:true,force:true,maxRetries:3})\"",
+    "dev:clean-profile": "node -e \"require('fs').rmSync(require('path').join(require('os').tmpdir(),'hunktracker-dev-profile'),{recursive:true,force:true,maxRetries:3})\"",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "npx --yes @vscode/vsce package --allow-missing-repository",
+    "install:vsix": "node -e \"const {name,version}=require('./package.json');require('child_process').execSync('code --install-extension '+name+'-'+version+'.vsix --force',{stdio:'inherit'})\"",
+    "uninstall:vsix": "code --uninstall-extension GeorgeSamartzidis.hunktracker",
+    "test": "node scripts/runUnitTests.js",
+    "test:integration": "npm run compile && tsc -p ./tsconfig.integration.json && vscode-test"
+  },
+  "devDependencies": {
+    "@types/diff": "^5.x",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^20.19.37",
+    "@types/vscode": "^1.90.0",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^2.5.2",
+    "typescript": "^5.x"
+  },
+  "dependencies": {
+    "diff": "^5.2.0",
+    "ignore": "^7.0.5"
+  }
+}
