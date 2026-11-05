@@ -7,6 +7,7 @@ import { log } from './log';
 import { normalizePath } from './pathNormalize';
 import { mapLimit } from './concurrency';
 import { mergeIgnorePatterns } from './ignorePatterns';
+import { isOverSizeLimit } from './fileLimits';
 import { ProgressReporter, type ProgressInfo } from './progress';
 
 /**
@@ -39,10 +40,8 @@ async function collectWorkspaceFiles(
   return results;
 }
 
-/** Files read from disk at once when comparing the workspace with its baselines. */
+/** Files compared with their baseline text at once (each holds its baseline and disk text in memory). */
 const DISK_READ_CONCURRENCY = 32;
-/** Baselines held in memory at once while classifying files that differ from them. */
-const BASELINE_CHUNK = 200;
 
 // .git is excluded by the file watcher itself (see isInsideDotGit); a new project starts with no patterns
 const DEFAULT_IGNORE_PATTERNS: string[] = [];
@@ -146,6 +145,8 @@ export class StateManager {
         } else if (entry.isFile() && !trackedSet.has(full)) {
           try {
             await fs.promises.access(full, fs.constants.R_OK);
+            // Files over the size limit are not tracked, so they must not show up as new files either
+            if (isOverSizeLimit((await fs.promises.stat(full)).size)) continue;
             results.push(full);
           } catch {
             // Skip unreadable files (e.g. permission errors) to avoid
@@ -190,8 +191,9 @@ export class StateManager {
     this._useDiffEditor = settings.useDiffEditor;
     this._showInlineDecorations = settings.showInlineDecorations;
 
-    // Initialize git (idempotent) then restore in-memory state from HEAD
+    // Initialize git (idempotent) then restore in-memory state from the baselines
     await g.initGit();
+    await this.recoverDamagedStore(g, shouldIgnore);
     const tracked = await g.listTrackedFiles();
     const ignored: string[] = [];
     const candidates: string[] = [];
@@ -227,13 +229,29 @@ export class StateManager {
   }
 
   /**
+   * If the baseline index could not be read, it was moved aside: take fresh baselines of the whole
+   * workspace (as Enable does), so the files do not all show up as new. Pending changes from before the
+   * damage are lost, which is acceptable for what is only a review aid.
+   */
+  private async recoverDamagedStore(
+    g: HunktrackerGit,
+    shouldIgnore?: (filePath: string, isDirectory?: boolean) => boolean
+  ): Promise<void> {
+    if (!this.workspaceRoot || !(await g.repairIfDamaged())) return;
+    const files = await collectWorkspaceFiles(this.workspaceRoot, shouldIgnore, found => this.report({ phase: 'scanning', done: found }));
+    log(`baseline index was damaged: taking fresh baselines of ${files.length} file(s)`);
+    this.gitQueue = this.gitQueue.then(() => g.snapshotFiles(files, this.savingProgress)).catch(err => { log(`git queue error: ${err}`); });
+    await this.gitQueue;
+  }
+
+  /**
    * Put every tracked file into the right state by comparing the disk with its baseline: files
    * with pending changes (and deleted files) become `reviewing` in `this.state`.
    *
-   * Cheap for big workspaces: git hashes the disk files and compares them with the index
+   * Cheap for big workspaces: the disk files are hashed and compared with the stored ids
    * (`scanAgainstDisk`), so baseline text is fetched only for files that differ or are gone, and
-   * in bounded chunks. Reading every baseline into memory, or starting a git process per file,
-   * stalls a machine on a repository with tens of thousands of files.
+   * only a few at a time. Reading every baseline into memory stalls a machine on a repository with
+   * tens of thousands of files.
    */
   private async classifyTracked(
     g: HunktrackerGit,
@@ -243,16 +261,21 @@ export class StateManager {
     const idle: string[] = [];
     const scan = await g.scanAgainstDisk(files, (done, total) => this.report({ phase: 'comparing', done, total }));
     const skippedNoBaseline = [...scan.noBaseline];
+    // Files over the size limit are not tracked: a baseline taken while a file was smaller is dropped
+    if (scan.tooLarge.length > 0) {
+      log(`${scan.tooLarge.length} file(s) grew over the size limit, no longer tracked: ${logFileList(scan.tooLarge, this.workspaceRoot)}`);
+      const tooLarge = scan.tooLarge;
+      this.gitQueue = this.gitQueue.then(() => g.removeFileBatch(tooLarge)).catch(err => { log(`git queue error: ${err}`); });
+    }
     idle.push(...scan.unchanged, ...scan.unreadable);
 
     const deleted = new Set(scan.deleted);
     const needContent = [...scan.deleted, ...scan.differing];
-    for (let i = 0; i < needContent.length; i += BASELINE_CHUNK) {
-      const chunk = needContent.slice(i, i + BASELINE_CHUNK);
-      this.report({ phase: 'checking', done: i, total: needContent.length });
-      const baselines = await g.getBaselines(chunk);
-      await mapLimit(chunk, DISK_READ_CONCURRENCY, async filePath => {
-        const baseline = baselines.get(filePath);
+    let checked = 0;
+    if (needContent.length > 0) this.report({ phase: 'checking', done: 0, total: needContent.length });
+    await mapLimit(needContent, DISK_READ_CONCURRENCY, async filePath => {
+      try {
+        const baseline = await g.getBaseline(filePath);
         if (baseline === undefined) {
           skippedNoBaseline.push(filePath);
           return;
@@ -276,8 +299,10 @@ export class StateManager {
         } else {
           idle.push(filePath);
         }
-      });
-    }
+      } finally {
+        this.report({ phase: 'checking', done: ++checked, total: needContent.length });
+      }
+    });
     return { reviewing, idle, skippedNoBaseline };
   }
 
@@ -306,6 +331,7 @@ export class StateManager {
     // Rebuild: clear and reload from git (same logic as load, but parallelized)
     this.state.clear();
     await g.initGit();
+    await this.recoverDamagedStore(g, shouldIgnore);
     const tracked = await g.listTrackedFiles();
     const filtered = tracked.filter(fp => !shouldIgnore?.(fp));
     await this.classifyTracked(g, filtered);
@@ -606,8 +632,8 @@ export class StateManager {
     const collect = (dir: string) => collectWorkspaceFiles(dir, shouldIgnore, found => this.report({ phase: 'scanning', done: found }));
 
     // Let queued baseline writes land before deciding what is untracked. Files snapshotted by an
-    // earlier operation (Enable) show up in HEAD only after their commit; without this wait they
-    // would be queued for a second snapshot, and git reads the disk only when that job runs, so
+    // earlier operation (Enable) are only listed once that write is done; without this wait they
+    // would be queued for a second snapshot, and the disk is read only when that job runs, so
     // edits made in the meantime would be adopted as the baseline instead of showing as hunks.
     await this.gitQueue;
 
@@ -635,8 +661,8 @@ export class StateManager {
       this.gitQueue = this.gitQueue.then(() => g.removeFileBatch(toRemove)).catch(err => { log(`git queue error: ${err}`); });
     }
 
-    // Add newly allowed files not yet tracked (check both git HEAD and in-memory state
-    // to avoid re-adding files that were loaded from index but not yet committed to HEAD).
+    // Add newly allowed files not yet tracked (check both the baselines and in-memory state
+    // to avoid re-adding files whose baseline is still being written).
     //
     // These files are silently snapshotted with their current content as baseline,
     // rather than treated as "new" (baseline='') which would produce hunks. This is
@@ -654,9 +680,9 @@ export class StateManager {
     }
     if (toAdd.length > 0) {
       // Decide again when the job actually runs. The queue runs one job at a time, so by then an
-      // earlier job (Enable's snapshot of the same files) has been committed and is in HEAD.
-      // Judging only from the HEAD read above would snapshot those files a second time, and git
-      // reads the disk when the job runs: edits made since would be adopted as the baseline.
+      // earlier job (Enable's snapshot of the same files) has finished and they are listed.
+      // Judging only from the list read above would snapshot those files a second time, and the
+      // disk is read when the job runs: edits made since would be adopted as the baseline.
       this.gitQueue = this.gitQueue.then(async () => {
         const nowTracked = new Set(await g.listTrackedFiles());
         const stillMissing = toAdd.filter(fp => !nowTracked.has(fp) && !this.state.has(fp));

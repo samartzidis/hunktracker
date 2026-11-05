@@ -325,7 +325,7 @@ function renderSettingsScreen(state) {
   // ── Exclude Patterns ──
   const patternSection = el('div', 'settings-section');
   patternSection.appendChild(el('div', 'settings-section-title', 'Exclude Patterns'));
-  patternSection.appendChild(el('p', 'settings-section-desc', 'gitignore-style patterns to exclude from change tracking (relative to workspace root). .git folders are always excluded. Global patterns apply to every project and are merged with this project\'s own.'));
+  patternSection.appendChild(el('p', 'settings-section-desc', 'gitignore-style patterns to exclude from change tracking (relative to workspace root). .git folders and files over 10 MB are always excluded. Global patterns apply to every project and are merged with this project\'s own.'));
 
   const patternList = el('div', 'pattern-list');
   const globalPatterns = state.globalIgnorePatterns || [];

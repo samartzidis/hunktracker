@@ -4,7 +4,7 @@
   "author": "George Samartzidis",
   "displayName": "Hunk Tracker",
   "description": "Per-hunk Accept/Discard for any file change",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -198,6 +198,7 @@
   },
   "dependencies": {
     "diff": "^5.2.0",
-    "ignore": "^7.0.5"
+    "ignore": "^7.0.5",
+    "isomorphic-git": "1.44.11"
   }
 }

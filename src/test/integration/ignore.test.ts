@@ -235,7 +235,6 @@ suite('hunktracker ignore/gitignore integration', function () {
     execSync(`git update-index --add --cacheinfo 100644,${hash},stale-dir/old.txt`, {
       cwd: root, env,
     });
-    execSync('git commit --amend --no-edit --allow-empty', { cwd: root, env });
 
     // Verify the stale file is now in git (simulating leftover from previous session)
     tracked = gitListTracked(root);

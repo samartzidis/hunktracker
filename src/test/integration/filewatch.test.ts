@@ -336,4 +336,21 @@ suite('hunktracker file watcher integration', function () {
       delete git.getBaseline; // back to the prototype method
     }
   });
+
+  test('a tracked file that grows past the size limit is forgotten: no pending changes, no baseline', async () => {
+    const root = getWorkspaceRoot();
+    const fp = path.join(root, 'grows-past-limit.log');
+    writeFileExternally(fp, 'line 1\n');
+    await enableHunktracker();
+    await waitForCondition(() => gitListTracked(root).includes('grows-past-limit.log'), 8000);
+
+    // a small external change first: the file has pending changes
+    writeFileExternally(fp, 'line 1\nline 2\n');
+    await waitForCondition(() => getStateManager().getFile(fp)?.status === 'reviewing', 8000);
+
+    // then it grows past 10 MB (a log file, a dump...)
+    writeFileExternally(fp, 'x'.repeat(10 * 1024 * 1024 + 10));
+    await waitForCondition(() => getStateManager().getFile(fp) === undefined, 10000, 200);
+    await waitForCondition(() => !gitListTracked(root).includes('grows-past-limit.log'), 10000, 200);
+  });
 });

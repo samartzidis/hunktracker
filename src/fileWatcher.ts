@@ -9,6 +9,7 @@ import { computeHunks } from './diffEngine';
 import { log } from './log';
 import { normalizePath } from './pathNormalize';
 import { isInsideDotGit } from './ignorePatterns';
+import { isFileOverSizeLimit } from './fileLimits';
 
 // Transform gitignore rules from a sub-directory so they work in a single
 // root-level matcher. Adds the directory's relative path as prefix, handling
@@ -287,6 +288,19 @@ export class FileWatcher {
     return false;
   }
 
+  /**
+   * A file over the size limit is not tracked. If it was (it grew past the limit), drop its pending
+   * changes and its baseline, so neither the panel nor a later startup scan works on it.
+   */
+  private forgetOversizeFile(filePath: string): void {
+    const hadState = this.stateManager.getFile(filePath) !== undefined;
+    this.stateManager.removeFile(filePath);
+    if (hadState) {
+      log(`${path.basename(filePath)}: over the size limit, no longer tracked`);
+      this.onStateChanged();
+    }
+  }
+
   private async onDiskCreate(uri: vscode.Uri): Promise<void> {
     const filePath = normalizePath(uri.fsPath);
     const basename = path.basename(filePath);
@@ -295,6 +309,8 @@ export class FileWatcher {
     if (!this.stateManager.enabled) return;
     if (this.shouldIgnore(filePath)) return;
     if (this.selfEditFiles.has(filePath)) return;
+    // Over the size limit: not tracked, so never read into memory (and forgotten if it was tracked)
+    if (await isFileOverSizeLimit(filePath)) { this.forgetOversizeFile(filePath); return; }
 
     const fileState = this.stateManager.getFile(filePath);
     log(`onDiskCreate(${basename}): fileState=${fileState ? `{status:${fileState.status}, baseline.len:${fileState.baseline?.length ?? 'null'}}` : 'undefined'}`);
@@ -451,6 +467,8 @@ export class FileWatcher {
 
     if (this.shouldIgnore(filePath)) return;
     if (this.selfEditFiles.has(filePath)) return;
+    // Over the size limit: not tracked, so never read into memory (and forgotten if it was tracked)
+    if (await isFileOverSizeLimit(filePath)) { this.forgetOversizeFile(filePath); return; }
 
     let diskContent: string;
     try {
