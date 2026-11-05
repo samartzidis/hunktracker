@@ -8,6 +8,8 @@ import { StateManager } from './stateManager';
 import { computeHunks } from './diffEngine';
 import { log } from './log';
 import { normalizePath } from './pathNormalize';
+import { isInsideDotGit } from './ignorePatterns';
+import { isFileOverSizeLimit } from './fileLimits';
 
 // Transform gitignore rules from a sub-directory so they work in a single
 // root-level matcher. Adds the directory's relative path as prefix, handling
@@ -232,6 +234,17 @@ export class FileWatcher {
     log(`ignoring ${filePath}: outside the first workspace folder; only the first folder is tracked`);
   }
 
+  private userMatcher: { key: string; matcher: Ignore } | undefined;
+
+  /** The matcher for the user's exclude patterns, rebuilt only when the patterns change. */
+  private userMatcherFor(patterns: string[]): Ignore {
+    const key = patterns.join('\n');
+    if (!this.userMatcher || this.userMatcher.key !== key) {
+      this.userMatcher = { key, matcher: ignoreLib().add(patterns) };
+    }
+    return this.userMatcher.matcher;
+  }
+
   shouldIgnore(filePath: string, isDirectory?: boolean): boolean {
     if (!filePath) return false;
 
@@ -255,22 +268,9 @@ export class FileWatcher {
       return true;
     }
 
-    let relPath = '';
-    try {
-      relPath = vscode.workspace.asRelativePath(vscode.Uri.file(filePath), false) || '';
-    } catch {
-      relPath = '';
-    }
-
-    if (!relPath) {
-      try {
-        relPath = path.relative(rootPath, filePath);
-      } catch {
-        relPath = '';
-      }
-    }
-
-    relPath = relPath.replace(/\\/g, '/');
+    // Called for every file and folder of a workspace walk, so keep it cheap: `fromRoot` is
+    // already the path relative to the first folder (no vscode API call per entry).
+    let relPath = fromRoot.replace(/\\/g, '/');
     if (!relPath || relPath === '.') return false;
     if (relPath.startsWith('..')) return false;
 
@@ -279,12 +279,26 @@ export class FileWatcher {
     // returns false even though the pattern is meant to ignore that directory.
     if (isDirectory) relPath += '/';
 
-    const userMatcher = ignoreLib().add(this.stateManager.ignorePatterns);
-    if (userMatcher.ignores(relPath)) return true;
+    if (isInsideDotGit(relPath)) return true;
+
+    if (this.userMatcherFor(this.stateManager.effectiveIgnorePatterns).ignores(relPath)) return true;
 
     if (this.stateManager.respectGitignore && this.gitignoreMatcher.ignores(relPath)) return true;
 
     return false;
+  }
+
+  /**
+   * A file over the size limit is not tracked. If it was (it grew past the limit), drop its pending
+   * changes and its baseline, so neither the panel nor a later startup scan works on it.
+   */
+  private forgetOversizeFile(filePath: string): void {
+    const hadState = this.stateManager.getFile(filePath) !== undefined;
+    this.stateManager.removeFile(filePath);
+    if (hadState) {
+      log(`${path.basename(filePath)}: over the size limit, no longer tracked`);
+      this.onStateChanged();
+    }
   }
 
   private async onDiskCreate(uri: vscode.Uri): Promise<void> {
@@ -295,6 +309,8 @@ export class FileWatcher {
     if (!this.stateManager.enabled) return;
     if (this.shouldIgnore(filePath)) return;
     if (this.selfEditFiles.has(filePath)) return;
+    // Over the size limit: not tracked, so never read into memory (and forgotten if it was tracked)
+    if (await isFileOverSizeLimit(filePath)) { this.forgetOversizeFile(filePath); return; }
 
     const fileState = this.stateManager.getFile(filePath);
     log(`onDiskCreate(${basename}): fileState=${fileState ? `{status:${fileState.status}, baseline.len:${fileState.baseline?.length ?? 'null'}}` : 'undefined'}`);
@@ -451,6 +467,8 @@ export class FileWatcher {
 
     if (this.shouldIgnore(filePath)) return;
     if (this.selfEditFiles.has(filePath)) return;
+    // Over the size limit: not tracked, so never read into memory (and forgotten if it was tracked)
+    if (await isFileOverSizeLimit(filePath)) { this.forgetOversizeFile(filePath); return; }
 
     let diskContent: string;
     try {

@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { cleanPatternList } from './ignorePatterns';
 
 /**
  * Plugin-wide (user-level) settings, stored in VS Code's own settings rather than
@@ -15,6 +16,18 @@ export function getUserSetting(key: UserSettingKey): boolean {
 export function setUserSetting(key: UserSettingKey, value: boolean): Thenable<void> {
   return vscode.workspace.getConfiguration('hunktracker')
     .update(key, value, vscode.ConfigurationTarget.Global);
+}
+
+/** Exclude patterns that apply to every project (merged with each project's own list). */
+export function getGlobalIgnorePatterns(): string[] {
+  return cleanPatternList(vscode.workspace.getConfiguration('hunktracker').get<unknown>('globalIgnorePatterns', []));
+}
+
+export function setGlobalIgnorePatterns(patterns: string[]): Thenable<void> {
+  const clean = cleanPatternList(patterns);
+  // undefined removes the entry, so an empty list goes back to the declared default
+  return vscode.workspace.getConfiguration('hunktracker')
+    .update('globalIgnorePatterns', clean.length ? clean : undefined, vscode.ConfigurationTarget.Global);
 }
 
 /**

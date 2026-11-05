@@ -5,7 +5,7 @@ import assert from 'assert';
 import {
   getWorkspaceRoot, getDataDir, gitListTracked, gitGetBaseline,
   sleep, waitForCondition, enableHunktracker, disableHunktracker,
-  writeFileExternally, cleanWorkspace,
+  writeFileExternally, cleanWorkspace, getStateManager,
 } from './helpers';
 
 // ── Test suite ────────────────────────────────────────────────────────────────
@@ -20,6 +20,28 @@ suite('hunktracker lifecycle integration', function () {
   teardown(async function () {
     try { await disableHunktracker(); } catch { /* ignore */ }
     await cleanWorkspace();
+  });
+
+  test('enable reports progress (scanning, then saving baselines) for the Initializing screen', async () => {
+    const root = getWorkspaceRoot();
+    writeFileExternally(path.join(root, 'progress-a.txt'), 'a\n');
+    writeFileExternally(path.join(root, 'progress-b.txt'), 'b\n');
+
+    // Listen next to the extension's own listener (it forwards the text to the panel)
+    const sm = getStateManager();
+    const previous = sm.onProgress;
+    const texts: string[] = [];
+    sm.onProgress = (text: string) => { texts.push(text); previous?.(text); };
+    try {
+      await enableHunktracker();
+    } finally {
+      sm.onProgress = previous;
+    }
+
+    assert.ok(texts.some(t => t.startsWith('Scanning files')), `no scanning text in ${JSON.stringify(texts)}`);
+    assert.ok(texts.includes('Saving baselines… 2 / 2'), `no finished saving text in ${JSON.stringify(texts)}`);
+    // the screen shows one line at a time and it ends on the finished count
+    assert.ok(texts.lastIndexOf('Saving baselines… 2 / 2') > texts.findIndex(t => t.startsWith('Scanning files')));
   });
 
   test('enable creates hunktracker git directory and settings', async () => {
@@ -37,7 +59,7 @@ suite('hunktracker lifecycle integration', function () {
 
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
     assert.ok(Array.isArray(settings.ignorePatterns), 'Settings should have ignorePatterns');
-    assert.ok(settings.ignorePatterns.includes('.git'), '.git should be in default ignorePatterns');
+    assert.deepStrictEqual(settings.ignorePatterns, [], '.git is built in, so a new project starts with no patterns');
     assert.strictEqual(settings.respectGitignore, true, 'respectGitignore should default to true');
 
     // Data lives in extension storage, never inside the project
@@ -99,11 +121,11 @@ suite('hunktracker lifecycle integration', function () {
 
     await enableHunktracker();
 
-    await vscode.commands.executeCommand('hunktracker.setIgnorePatterns', ['.git', 'node_modules', '*.tmp']);
+    await vscode.commands.executeCommand('hunktracker.setIgnorePatterns', ['node_modules', '*.tmp']);
     await sleep(200);
 
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
-    assert.deepStrictEqual(settings.ignorePatterns, ['.git', 'node_modules', '*.tmp']);
+    assert.deepStrictEqual(settings.ignorePatterns, ['node_modules', '*.tmp']);
   });
 
   test('setRespectGitignore persists to settings.json', async () => {

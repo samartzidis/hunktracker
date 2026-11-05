@@ -49,7 +49,7 @@ export function hunktrackerGitEnv(root: string): NodeJS.ProcessEnv {
 
 export function gitListTracked(root: string): string[] {
   try {
-    const out = execSync('git -c core.quotepath=false ls-tree HEAD --name-only -r', {
+    const out = execSync('git -c core.quotepath=false ls-files', {
       cwd: root,
       env: hunktrackerGitEnv(root),
       encoding: 'utf-8',

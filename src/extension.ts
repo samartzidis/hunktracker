@@ -10,7 +10,7 @@ import { registerHunkNavigation } from './hunkNavigation';
 import { DiffCodeLensProvider } from './diffCodeLens';
 import { initLog, log } from './log';
 import { probeProposedApi } from './proposedApi';
-import { getUserSetting } from './userSettings';
+import { getUserSetting, getGlobalIgnorePatterns } from './userSettings';
 import { sweepOrphanedStorage, describeSweep } from './storageCleanup';
 
 export async function activate(context: vscode.ExtensionContext): Promise<{ getReviewPanel: () => ReviewPanel | undefined; getStateManager: () => StateManager | undefined; getFileWatcher: () => FileWatcher | undefined }> {
@@ -100,6 +100,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<{ getR
   fileWatcher.register(context);
   fileWatcher.suppressAll();
 
+  // Global exclude patterns live in a user setting. Read them before load() so the first scan
+  // already honours them, and re-sync tracked files whenever they change (settings screen,
+  // Settings UI or settings.json).
+  stateManager.globalIgnorePatterns = getGlobalIgnorePatterns();
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration(e => {
+      if (!e.affectsConfiguration('hunktracker.globalIgnorePatterns')) return;
+      stateManager.globalIgnorePatterns = getGlobalIgnorePatterns();
+      log(`global ignore patterns changed: ${JSON.stringify(stateManager.globalIgnorePatterns)}`);
+      onStateChanged(); // show the new list at once; the sync below can take a while on big projects
+      if (stateManager.enabled) syncIgnore();
+    })
+  );
+
   try {
     await stateManager.load((fp, isDir) => fileWatcher.shouldIgnore(fp, isDir));
     log(`loaded state: enabled=${stateManager.enabled}, files=${stateManager.getAllFiles().size}`);
@@ -150,6 +164,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<{ getR
   );
 
   reviewPanel = new ReviewPanel(context, stateManager, fileWatcher, onStateChanged, fireBaselineChange, closeStaleTabs);
+  // Long scans and snapshots report here, shown under "Initializing…" so a big repo does not look hung
+  stateManager.onProgress = text => reviewPanel?.setLoadingText(text);
   // The inline hunk controls need the editorInsets proposal, which VS Code only allows
   // after an argv.json opt-in. If it is blocked, the panel shows setup steps instead.
   const createInset = (vscode.window as any).createWebviewTextEditorInset;

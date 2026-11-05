@@ -8,7 +8,7 @@ import { sortFiles } from './fileOrder';
 import { computeStripMarks, countLines, type StripMark } from './changeStrip';
 import { log } from './log';
 import type { ApiStatus } from './proposedApi';
-import { getUserSetting, setUserSetting, getReturnToView, setReturnToView, type UserSettingKey } from './userSettings';
+import { getUserSetting, setUserSetting, getReturnToView, setReturnToView, setGlobalIgnorePatterns, type UserSettingKey } from './userSettings';
 import { collectReturnOptions, type ReturnOption } from './containerOptions';
 
 import {
@@ -25,6 +25,8 @@ interface PanelState {
   proposedApiStatus: ApiStatus;
   enabled: boolean;
   ignorePatterns: string[];
+  /** Patterns from the user-level setting, applied to every project. */
+  globalIgnorePatterns: string[];
   respectGitignore: boolean;
   clearOnBranchSwitch: boolean;
   autoAcceptOnStartup: boolean;
@@ -161,6 +163,7 @@ export class ReviewPanel implements vscode.WebviewViewProvider {
       if (msg.command === 'ready') {
         if (this._loading) {
           this.view?.webview.postMessage({ type: 'loading', loading: true });
+          if (this._loadingText) this.view?.webview.postMessage({ type: 'loadingText', text: this._loadingText });
         } else {
           this.refresh();
         }
@@ -270,8 +273,20 @@ export class ReviewPanel implements vscode.WebviewViewProvider {
       .catch(err => log(`autoRevealPanel: reveal failed: ${err}`));
   }
 
+  /** Progress line under "Initializing…" (e.g. "Saving baselines… 3,000 / 48,000"); '' = none yet. */
+  private _loadingText = '';
+
+  /** Update the progress line. Ignored when not loading. Cheap: only one line of text is replaced. */
+  setLoadingText(text: string): void {
+    if (!this._loading) return;
+    this._loadingText = text;
+    this.view?.webview.postMessage({ type: 'loadingText', text });
+  }
+
   setLoading(loading: boolean): void {
     this._loading = loading;
+    this._loadingText = '';
+    if (loading) this.stateManager.resetProgress(); // so the first report of this run is shown
     if (!this.view) return;
     if (loading) {
       this.view.webview.postMessage({ type: 'loading', loading: true });
@@ -354,6 +369,7 @@ export class ReviewPanel implements vscode.WebviewViewProvider {
       proposedApiStatus: this.proposedApiStatus,
       enabled: this.stateManager.enabled,
       ignorePatterns: this.stateManager.ignorePatterns,
+      globalIgnorePatterns: this.stateManager.globalIgnorePatterns,
       respectGitignore: this.stateManager.respectGitignore,
       clearOnBranchSwitch: this.stateManager.clearOnBranchSwitch,
       autoAcceptOnStartup: getUserSetting('autoAcceptOnStartup'),
@@ -391,6 +407,10 @@ export class ReviewPanel implements vscode.WebviewViewProvider {
         if (msg.folders !== undefined) {
           await vscode.commands.executeCommand('hunktracker.setIgnorePatterns', msg.folders);
         }
+        break;
+      case 'setGlobalIgnorePatterns':
+        // The configuration change listener in extension.ts re-syncs tracked files
+        if (msg.folders !== undefined) await setGlobalIgnorePatterns(msg.folders);
         break;
       case 'setRespectGitignore':
         if (msg.value !== undefined) {

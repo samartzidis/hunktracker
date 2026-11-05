@@ -6,11 +6,17 @@ Review in-line file changes made in Visual Studio Code by AI coding assistants l
 
 Based on [molon/hunkwise](https://github.com/molon/hunkwise) but incorporating improvements and additional features such as:
 
-- **Windows Fixes** Paths are handled correctly.
-- **Hunk navigation.** `‹` / `›` buttons and `Alt+,` / `Alt+.` jump to the previous or next hunk, carry on into the next changed file, and wrap around at the end.
-- **Auto-accept on startup** (off by default). Accepts everything still pending when you reopen a workspace.
-- **Auto-reveal panel** (off by default). For a side-bar layout: shows the Hunk Tracker view when a file gets new changes and hides it when nothing is pending. Pick a pane to return to afterwards (for example Claude Code) in the Hunk Tracker settings screen; nothing happens if Hunk Tracker could not hide.
-- **Your project stays clean.** Hunk Tracker keeps its settings and baselines in the editor's per-workspace extension storage (for VS Code on Windows, under `%APPDATA%\Code\User\workspaceStorage`), not in your project, so there is nothing to add to `.gitignore`. Each editor (VS Code, Insiders, Cursor) keeps its own copy. VS Code does not delete that storage when a project folder is deleted, so shortly after startup Hunk Tracker removes its own data for projects whose folder no longer exists (local folders only; it never touches project files or other extensions' data).
+- **Windows fixes.** Paths work correctly on Windows.
+- **Hunk navigation.** Buttons and `Alt+,` / `Alt+.` jump to the previous or next change, continue into the next changed file and wrap around at the end.
+- **Auto-accept on startup** (off by default). Changes still pending when a workspace is reopened are accepted automatically.
+- **Auto-reveal panel** (off by default). The Hunk Tracker view appears when a file gets new changes and hides again when nothing is pending, optionally returning to another pane such as Claude Code.
+- **Clean projects.** Settings and baselines live in the editor's own storage, never in the project, so nothing needs adding to `.gitignore`. Data of deleted projects is removed automatically.
+- **Exclude patterns.** Files can be excluded with gitignore-style patterns, for one project or for all projects (tick *Global scoped* in the settings screen).
+- **No git needed.** Git does not have to be installed, and enabling a large project is several times faster.
+- **Big files skipped.** Files over 10 MB, such as executables, archives and media, are not tracked.
+- **Position strip.** Each changed file shows a small bar marking where in the file the changes are: green for added, red for removed.
+- **Familiar order.** Changed files are listed like the Explorer, and next/previous follow the same order.
+- **Visible progress.** Starting on a large project shows what is happening instead of a blank wait.
 - **Simpler UI.** Enable and Disable are buttons in the panel (Disable is under Settings), not Command Palette entries.
 
 ## Installation

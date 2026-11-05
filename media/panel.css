@@ -52,6 +52,16 @@ body {
   text-align: center;
 }
 
+/* Progress under "Initializing…" (scanning / saving / comparing); tabular digits keep it from jittering */
+.splash-progress {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+  opacity: 0.8;
+  line-height: 1.4;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Blocked: editorInsets proposed API not enabled, so the pane is greyed out */
 .splash-blocked .splash-icon {
   filter: grayscale(1);
@@ -295,13 +305,13 @@ body {
 .pattern-list {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 0;
 }
 
 .pattern-row-inner {
   display: flex;
   align-items: center;
-  height: 26px;
+  height: 20px;
   border-radius: 3px;
   padding: 0 2px 0 8px;
   gap: 2px;
@@ -366,6 +376,25 @@ body {
   align-items: center;
   gap: 6px;
   margin-top: 8px;
+}
+
+.pattern-scope {
+  flex-shrink: 0;
+  font-size: 9px;
+  line-height: 14px;
+  padding: 0 5px;
+  border-radius: 7px;
+  color: var(--vscode-badge-foreground);
+  background: var(--vscode-badge-background);
+  opacity: 0.85;
+}
+
+.pattern-scope-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 6px;
+  cursor: pointer;
 }
 
 .pattern-input {

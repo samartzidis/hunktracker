@@ -20,6 +20,8 @@ suite('hunktracker ignore/gitignore integration', function () {
   });
 
   teardown(async function () {
+    // global patterns are a user setting, not part of the workspace: always put them back
+    await vscode.workspace.getConfiguration('hunktracker').update('globalIgnorePatterns', undefined, vscode.ConfigurationTarget.Global);
     try { await disableHunktracker(); } catch { /* ignore */ }
     await cleanWorkspace();
   });
@@ -191,7 +193,7 @@ suite('hunktracker ignore/gitignore integration', function () {
 
     // Externally modify settings.json to add 'logs' to ignorePatterns
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
-    settings.ignorePatterns = ['.git', 'logs'];
+    settings.ignorePatterns = ['logs'];
     fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
 
     // Wait for fs.watch on hunktracker dir to detect settings.json change and trigger syncIgnore
@@ -233,7 +235,6 @@ suite('hunktracker ignore/gitignore integration', function () {
     execSync(`git update-index --add --cacheinfo 100644,${hash},stale-dir/old.txt`, {
       cwd: root, env,
     });
-    execSync('git commit --amend --no-edit --allow-empty', { cwd: root, env });
 
     // Verify the stale file is now in git (simulating leftover from previous session)
     tracked = gitListTracked(root);
@@ -466,5 +467,41 @@ suite('hunktracker ignore/gitignore integration', function () {
     const tracked = gitListTracked(root);
     assert.ok(tracked.includes('src/app.ts'), 'src/app.ts should still be tracked');
     assert.ok(!tracked.includes('src/debug.tmp'), 'src/debug.tmp should be removed after nested .gitignore added');
+  });
+
+  test('global ignore patterns apply to the project, merge with its own, and can be overridden with !', async () => {
+    const root = getWorkspaceRoot();
+    const config = vscode.workspace.getConfiguration('hunktracker');
+    writeFileExternally(path.join(root, 'a.glob'), 'a\n');
+    writeFileExternally(path.join(root, 'keep.glob'), 'keep\n');
+    writeFileExternally(path.join(root, 'b.proj'), 'b\n');
+    writeFileExternally(path.join(root, 'plain.txt'), 'plain\n');
+
+    await enableHunktracker();
+    await waitForCondition(() => gitListTracked(root).includes('plain.txt') && gitListTracked(root).includes('a.glob'), 8000);
+
+    // A global pattern removes matching files from tracking
+    await config.update('globalIgnorePatterns', ['*.glob'], vscode.ConfigurationTarget.Global);
+    await waitForCondition(() => !gitListTracked(root).includes('a.glob'), 15000, 200);
+    assert.ok(gitListTracked(root).includes('b.proj'), 'unrelated files stay tracked');
+
+    // The project's own patterns add to the global ones
+    await vscode.commands.executeCommand('hunktracker.setIgnorePatterns', ['*.proj']);
+    await waitForCondition(() => !gitListTracked(root).includes('b.proj'), 15000, 200);
+    assert.ok(!gitListTracked(root).includes('a.glob'), 'global pattern still applies');
+    assert.ok(gitListTracked(root).includes('plain.txt'));
+
+    // The project can re-include something the global list excludes
+    await vscode.commands.executeCommand('hunktracker.setIgnorePatterns', ['*.proj', '!keep.glob']);
+    await waitForCondition(() => gitListTracked(root).includes('keep.glob'), 15000, 200);
+    assert.ok(!gitListTracked(root).includes('a.glob'), 'a.glob is still excluded');
+
+    // The project's list in settings.json holds only its own patterns
+    const settings = JSON.parse(fs.readFileSync(path.join(getDataDir(), 'settings.json'), 'utf-8'));
+    assert.deepStrictEqual(settings.ignorePatterns, ['*.proj', '!keep.glob']);
+
+    // Removing the global pattern brings a.glob back
+    await config.update('globalIgnorePatterns', undefined, vscode.ConfigurationTarget.Global);
+    await waitForCondition(() => gitListTracked(root).includes('a.glob'), 15000, 200);
   });
 });

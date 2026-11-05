@@ -75,7 +75,6 @@ suite('hunktracker startup & loading integration', function () {
     execSync(`git update-index --add --cacheinfo 100644,${hash},ignored-dir/stale.txt`, {
       cwd: root, env,
     });
-    execSync('git commit --amend --no-edit --allow-empty', { cwd: root, env });
 
     // Confirm stale file is in git
     tracked = gitListTracked(root);
@@ -129,7 +128,6 @@ suite('hunktracker startup & loading integration', function () {
       indexInfo += `100644 ${hash}\tbulk-dir/file-${i}.txt\n`;
     }
     execSync('git update-index --add --index-info', { cwd: root, env, input: indexInfo });
-    execSync('git commit --amend --no-edit --allow-empty', { cwd: root, env });
 
     // Confirm stale files are in git
     let tracked = gitListTracked(root);
@@ -266,5 +264,25 @@ suite('hunktracker startup & loading integration', function () {
       assert.strictEqual(panel.loading, false,
         'ReviewPanel loading must not be stuck on true after sync error');
     }
+  });
+
+  test('a damaged baseline index is repaired by Refresh: fresh baselines, no flood of new files', async () => {
+    const root = getWorkspaceRoot();
+    const a = path.join(root, 'damaged-a.txt');
+    const b = path.join(root, 'damaged-b.txt');
+    writeFileExternally(a, 'a\n');
+    writeFileExternally(b, 'b\n');
+    await enableHunktracker();
+    await waitForCondition(() => gitListTracked(root).includes('damaged-a.txt') && gitListTracked(root).includes('damaged-b.txt'), 8000);
+
+    const indexPath = path.join(getDataDir(), 'git', 'index');
+    fs.writeFileSync(indexPath, 'not a git index');
+    await vscode.commands.executeCommand('hunktracker.refresh');
+
+    await waitForCondition(() => gitListTracked(root).includes('damaged-a.txt') && gitListTracked(root).includes('damaged-b.txt'), 10000, 200);
+    const sm = getStateManager();
+    assert.strictEqual(sm.getFile(a), undefined, 'an unchanged file must not show up as new');
+    assert.strictEqual(sm.getFile(b), undefined, 'an unchanged file must not show up as new');
+    assert.ok(fs.existsSync(indexPath + '.damaged'), 'the damaged index is kept aside');
   });
 });

@@ -1,13 +1,7 @@
 **
-!out/*.js
+!out/extension.js
+!out/THIRD_PARTY_LICENSES.txt
 !media/**
 !package.json
 !README.md
 !LICENSE
-!node_modules/diff/package.json
-!node_modules/diff/LICENSE
-!node_modules/diff/lib/index.js
-!node_modules/diff/lib/*/*.js
-!node_modules/ignore/package.json
-!node_modules/ignore/LICENSE-MIT
-!node_modules/ignore/index.js
