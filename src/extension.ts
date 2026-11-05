@@ -150,6 +150,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<{ getR
   );
 
   reviewPanel = new ReviewPanel(context, stateManager, fileWatcher, onStateChanged, fireBaselineChange, closeStaleTabs);
+  // Long scans and snapshots report here, shown under "Initializing…" so a big repo does not look hung
+  stateManager.onProgress = text => reviewPanel?.setLoadingText(text);
   // The inline hunk controls need the editorInsets proposal, which VS Code only allows
   // after an argv.json opt-in. If it is blocked, the panel shows setup steps instead.
   const createInset = (vscode.window as any).createWebviewTextEditorInset;

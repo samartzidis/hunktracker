@@ -161,6 +161,7 @@ export class ReviewPanel implements vscode.WebviewViewProvider {
       if (msg.command === 'ready') {
         if (this._loading) {
           this.view?.webview.postMessage({ type: 'loading', loading: true });
+          if (this._loadingText) this.view?.webview.postMessage({ type: 'loadingText', text: this._loadingText });
         } else {
           this.refresh();
         }
@@ -270,8 +271,20 @@ export class ReviewPanel implements vscode.WebviewViewProvider {
       .catch(err => log(`autoRevealPanel: reveal failed: ${err}`));
   }
 
+  /** Progress line under "Initializing…" (e.g. "Saving baselines… 3,000 / 48,000"); '' = none yet. */
+  private _loadingText = '';
+
+  /** Update the progress line. Ignored when not loading. Cheap: only one line of text is replaced. */
+  setLoadingText(text: string): void {
+    if (!this._loading) return;
+    this._loadingText = text;
+    this.view?.webview.postMessage({ type: 'loadingText', text });
+  }
+
   setLoading(loading: boolean): void {
     this._loading = loading;
+    this._loadingText = '';
+    if (loading) this.stateManager.resetProgress(); // so the first report of this run is shown
     if (!this.view) return;
     if (loading) {
       this.view.webview.postMessage({ type: 'loading', loading: true });

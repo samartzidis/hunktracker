@@ -52,6 +52,16 @@ body {
   text-align: center;
 }
 
+/* Progress under "Initializing…" (scanning / saving / comparing); tabular digits keep it from jittering */
+.splash-progress {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+  opacity: 0.8;
+  line-height: 1.4;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Blocked: editorInsets proposed API not enabled, so the pane is greyed out */
 .splash-blocked .splash-icon {
   filter: grayscale(1);

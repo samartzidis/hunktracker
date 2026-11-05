@@ -574,7 +574,18 @@ window.addEventListener('message', event => {
       app.innerHTML = '';
       const screen = el('div', 'splash-screen');
       screen.appendChild(el('p', 'splash-tagline', 'Initializing…'));
+      const progress = el('p', 'splash-progress', '');
+      progress.id = 'loading-progress';
+      progress.hidden = true;
+      screen.appendChild(progress);
       app.appendChild(screen);
+    }
+  } else if (msg.type === 'loadingText') {
+    // Replace just the progress line: the splash screen is not rebuilt for every update
+    const progress = isLoading ? document.getElementById('loading-progress') : null;
+    if (progress) {
+      progress.textContent = typeof msg.text === 'string' ? msg.text : '';
+      progress.hidden = !progress.textContent;
     }
   } else if (msg.type === 'update') {
     currentState = msg.state;

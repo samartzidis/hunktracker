@@ -232,6 +232,17 @@ export class FileWatcher {
     log(`ignoring ${filePath}: outside the first workspace folder; only the first folder is tracked`);
   }
 
+  private userMatcher: { key: string; matcher: Ignore } | undefined;
+
+  /** The matcher for the user's exclude patterns, rebuilt only when the patterns change. */
+  private userMatcherFor(patterns: string[]): Ignore {
+    const key = patterns.join('\n');
+    if (!this.userMatcher || this.userMatcher.key !== key) {
+      this.userMatcher = { key, matcher: ignoreLib().add(patterns) };
+    }
+    return this.userMatcher.matcher;
+  }
+
   shouldIgnore(filePath: string, isDirectory?: boolean): boolean {
     if (!filePath) return false;
 
@@ -255,22 +266,9 @@ export class FileWatcher {
       return true;
     }
 
-    let relPath = '';
-    try {
-      relPath = vscode.workspace.asRelativePath(vscode.Uri.file(filePath), false) || '';
-    } catch {
-      relPath = '';
-    }
-
-    if (!relPath) {
-      try {
-        relPath = path.relative(rootPath, filePath);
-      } catch {
-        relPath = '';
-      }
-    }
-
-    relPath = relPath.replace(/\\/g, '/');
+    // Called for every file and folder of a workspace walk, so keep it cheap: `fromRoot` is
+    // already the path relative to the first folder (no vscode API call per entry).
+    let relPath = fromRoot.replace(/\\/g, '/');
     if (!relPath || relPath === '.') return false;
     if (relPath.startsWith('..')) return false;
 
@@ -279,8 +277,7 @@ export class FileWatcher {
     // returns false even though the pattern is meant to ignore that directory.
     if (isDirectory) relPath += '/';
 
-    const userMatcher = ignoreLib().add(this.stateManager.ignorePatterns);
-    if (userMatcher.ignores(relPath)) return true;
+    if (this.userMatcherFor(this.stateManager.ignorePatterns).ignores(relPath)) return true;
 
     if (this.stateManager.respectGitignore && this.gitignoreMatcher.ignores(relPath)) return true;
 

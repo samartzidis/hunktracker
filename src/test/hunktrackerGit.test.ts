@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { HunktrackerGit, isGitLockError } from '../hunktrackerGit';
+import { execFileSync } from 'child_process';
+import { HunktrackerGit, isGitLockError, parseCatFileBatch } from '../hunktrackerGit';
+import { removeDirSync } from '../fsUtil';
 
 let tmpDir: string;
 let hunktrackerDir: string;
@@ -417,6 +419,279 @@ describe('HunktrackerGit', () => {
       } finally {
         fs.rmSync(dir, { recursive: true, force: true });
       }
+    });
+  });
+
+  describe('batched operations (a few git processes, not one per file)', () => {
+    async function withRepo(fn: (g: HunktrackerGit, root: string, hDir: string) => Promise<void>): Promise<void> {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hunktracker-batch-'));
+      const hDir = path.join(root, '.vscode', 'hunktracker');
+      const g = new HunktrackerGit(hDir, root);
+      try {
+        await g.initGit();
+        await fn(g, root, hDir);
+      } finally {
+        removeDirSync(root);
+      }
+    }
+
+    describe('parseCatFileBatch', () => {
+      const oid = (c: string) => c.repeat(40);
+
+      it('reads contents, missing entries and empty blobs in order', () => {
+        const out = Buffer.from(`${oid('a')} blob 5\nhello\n:0:gone.txt missing\n${oid('b')} blob 0\n\n`, 'utf-8');
+        assert.deepEqual(parseCatFileBatch(out, 3), ['hello', undefined, '']);
+      });
+
+      it('counts bytes, not characters, and keeps newlines inside content', () => {
+        const content = 'é\nü\r\n';
+        const size = Buffer.byteLength(content, 'utf-8');
+        const out = Buffer.from(`${oid('c')} blob ${size}\n${content}\n`, 'utf-8');
+        assert.deepEqual(parseCatFileBatch(out, 1), [content]);
+      });
+
+      it('throws on truncated output instead of returning wrong baselines', () => {
+        assert.throws(() => parseCatFileBatch(Buffer.from(`${oid('d')} blob 50\nshort\n`, 'utf-8'), 1), /truncated/);
+        assert.throws(() => parseCatFileBatch(Buffer.from(`${oid('d')} blob 1\nx\n`, 'utf-8'), 2), /ended after 1 of 2/);
+      });
+    });
+
+    describe('getBaselines', () => {
+      it('returns the same as getBaseline for every file, including missing and empty ones', async () => {
+        await withRepo(async (g, root) => {
+          const files: Record<string, string> = {
+            'a.txt': 'alpha\n',
+            'empty.txt': '',
+            'dir with space/ü.txt': 'unicode é\n',
+            'crlf.txt': 'one\r\ntwo\r\n',
+          };
+          for (const [rel, content] of Object.entries(files)) await g.snapshot(path.join(root, rel), content);
+          const paths = [...Object.keys(files), 'never-tracked.txt'].map(rel => path.join(root, rel));
+
+          const batch = await g.getBaselines(paths);
+          assert.equal(batch.size, paths.length);
+          for (const fp of paths) assert.equal(batch.get(fp), await g.getBaseline(fp), path.basename(fp));
+          assert.equal(batch.get(path.join(root, 'empty.txt')), '');
+          assert.equal(batch.get(path.join(root, 'never-tracked.txt')), undefined);
+        });
+      });
+
+      it('handles an empty list', async () => {
+        await withRepo(async g => {
+          assert.equal((await g.getBaselines([])).size, 0);
+        });
+      });
+
+      it('copes with a burst of single reads (the number of git processes is capped)', async () => {
+        await withRepo(async (g, root) => {
+          const fp = path.join(root, 'one.txt');
+          await g.snapshot(fp, 'one\n');
+          const results = await Promise.all(Array.from({ length: 150 }, () => g.getBaseline(fp)));
+          assert.ok(results.every(r => r === 'one\n'));
+        });
+      });
+    });
+
+    describe('snapshotFiles', () => {
+      it('stores the bytes on disk unchanged, whatever core.autocrlf says', async () => {
+        await withRepo(async (g, root, hDir) => {
+          execFileSync('git', ['config', 'core.autocrlf', 'true'], { env: { ...process.env, GIT_DIR: path.join(hDir, 'git') } });
+          const fp = path.join(root, 'windows.txt');
+          fs.writeFileSync(fp, 'a\r\nb\r\n');
+          await g.snapshotFiles([fp]);
+          assert.equal(await g.getBaseline(fp), 'a\r\nb\r\n');
+        });
+      });
+
+      it('snapshots names with spaces and non-ASCII characters, and empty files', async () => {
+        await withRepo(async (g, root) => {
+          const a = path.join(root, 'my dir', 'naïve file.txt');
+          const e = path.join(root, 'empty.txt');
+          fs.mkdirSync(path.dirname(a), { recursive: true });
+          fs.writeFileSync(a, 'héllo\n');
+          fs.writeFileSync(e, '');
+          await g.snapshotFiles([a, e]);
+          assert.equal(await g.getBaseline(a), 'héllo\n');
+          assert.equal(await g.getBaseline(e), '');
+        });
+      });
+
+      it('skips a file that cannot be read and still snapshots the others', async () => {
+        await withRepo(async (g, root) => {
+          const x = path.join(root, 'x.txt');
+          const y = path.join(root, 'y.txt');
+          const gone = path.join(root, 'deleted-meanwhile.txt');
+          fs.writeFileSync(x, 'x\n');
+          fs.writeFileSync(y, 'y\n');
+          await g.snapshotFiles([x, gone, y]);
+          assert.equal(await g.getBaseline(x), 'x\n');
+          assert.equal(await g.getBaseline(y), 'y\n');
+          assert.equal(await g.getBaseline(gone), undefined);
+        });
+      });
+
+      it('commits, so the files are listed as tracked', async () => {
+        await withRepo(async (g, root) => {
+          const fp = path.join(root, 'tracked.txt');
+          fs.writeFileSync(fp, 't\n');
+          await g.snapshotFiles([fp]);
+          assert.ok((await g.listTrackedFiles()).some(p => p.endsWith('tracked.txt')));
+        });
+      });
+
+      it('does nothing for an empty list', async () => {
+        await withRepo(async g => {
+          await g.snapshotFiles([]);
+          assert.deepEqual(await g.listTrackedFiles(), []);
+        });
+      });
+
+      it('handles more files than fit in one git process (several batches)', async () => {
+        await withRepo(async (g, root) => {
+          const count = 1250; // 3 batches
+          const paths: string[] = [];
+          for (let i = 0; i < count; i++) {
+            const fp = path.join(root, `d${i % 25}`, `f${i}.txt`);
+            fs.mkdirSync(path.dirname(fp), { recursive: true });
+            fs.writeFileSync(fp, `file ${i}\n`);
+            paths.push(fp);
+          }
+          await g.snapshotFiles(paths);
+          assert.equal((await g.listTrackedFiles()).length, count);
+
+          const baselines = await g.getBaselines(paths);
+          assert.equal(baselines.size, count);
+          for (const i of [0, 1, 499, 500, 501, 999, 1000, 1249]) {
+            assert.equal(baselines.get(paths[i]), `file ${i}\n`, `file ${i}`);
+          }
+          assert.ok([...baselines.values()].every(v => v !== undefined));
+        });
+      });
+    });
+
+    describe('progress callbacks', () => {
+      const makeFiles = (root: string, count: number): string[] => {
+        const paths: string[] = [];
+        for (let i = 0; i < count; i++) {
+          const fp = path.join(root, `p${i % 10}`, `f${i}.txt`);
+          fs.mkdirSync(path.dirname(fp), { recursive: true });
+          fs.writeFileSync(fp, `file ${i}\n`);
+          paths.push(fp);
+        }
+        return paths;
+      };
+
+      it('snapshotFiles reports from 0 up to the total, once per batch', async () => {
+        await withRepo(async (g, root) => {
+          const paths = makeFiles(root, 1100); // 3 batches of up to 500
+          const seen: [number, number][] = [];
+          await g.snapshotFiles(paths, (done, total) => seen.push([done, total]));
+          assert.deepEqual(seen, [[0, 1100], [500, 1100], [1000, 1100], [1100, 1100]]);
+        });
+      });
+
+      it('scanAgainstDisk reports from 0 up to the number of files it hashes', async () => {
+        await withRepo(async (g, root) => {
+          const paths = makeFiles(root, 600);
+          await g.snapshotFiles(paths);
+          const seen: [number, number][] = [];
+          await g.scanAgainstDisk(paths, (done, total) => seen.push([done, total]));
+          assert.deepEqual(seen, [[0, 600], [500, 600], [600, 600]]);
+        });
+      });
+
+      it('both work without a callback and with nothing to do', async () => {
+        await withRepo(async g => {
+          await g.snapshotFiles([]);
+          assert.deepEqual((await g.scanAgainstDisk([])).unchanged, []);
+        });
+      });
+    });
+
+    describe('scanAgainstDisk', () => {
+      const names = (root: string, list: string[]) => list.map(p => path.relative(root, p).replace(/\\/g, '/')).sort();
+
+      it('sorts files into unchanged, differing, deleted and without baseline', async () => {
+        await withRepo(async (g, root) => {
+          const p = (n: string) => path.join(root, n);
+          for (const n of ['a.txt', 'b.txt', 'c.txt', 'd.txt']) fs.writeFileSync(p(n), `${n}\n`);
+          await g.snapshotFiles(['a.txt', 'b.txt', 'c.txt', 'd.txt'].map(p));
+
+          fs.writeFileSync(p('b.txt'), 'b changed\n');
+          fs.rmSync(p('c.txt'));
+          fs.writeFileSync(p('e.txt'), 'never snapshotted\n');
+
+          const scan = await g.scanAgainstDisk(['a.txt', 'b.txt', 'c.txt', 'd.txt', 'e.txt'].map(p));
+          assert.deepEqual(names(root, scan.unchanged), ['a.txt', 'd.txt']);
+          assert.deepEqual(names(root, scan.differing), ['b.txt']);
+          assert.deepEqual(names(root, scan.deleted), ['c.txt']);
+          assert.deepEqual(names(root, scan.noBaseline), ['e.txt']);
+          assert.deepEqual(scan.unreadable, []);
+        });
+      });
+
+      it('sees a file stored with snapshot() (content through stdin) as unchanged', async () => {
+        await withRepo(async (g, root) => {
+          const fp = path.join(root, 'old-way.txt');
+          fs.writeFileSync(fp, 'héllo\r\nwörld\n');
+          await g.snapshot(fp, 'héllo\r\nwörld\n');
+          assert.deepEqual((await g.scanAgainstDisk([fp])).unchanged, [fp]);
+        });
+      });
+
+      it('compares raw bytes even when core.autocrlf is on', async () => {
+        await withRepo(async (g, root, hDir) => {
+          execFileSync('git', ['config', 'core.autocrlf', 'true'], { env: { ...process.env, GIT_DIR: path.join(hDir, 'git') } });
+          const fp = path.join(root, 'crlf.txt');
+          fs.writeFileSync(fp, 'a\r\nb\r\n');
+          await g.snapshotFiles([fp]);
+          assert.deepEqual((await g.scanAgainstDisk([fp])).unchanged, [fp]);
+          fs.writeFileSync(fp, 'a\nb\n'); // only the line endings changed: still a difference
+          assert.deepEqual((await g.scanAgainstDisk([fp])).differing, [fp]);
+        });
+      });
+
+      it('treats something that is not a regular file as unreadable, not as a change', async () => {
+        await withRepo(async (g, root) => {
+          const fp = path.join(root, 'was-a-file');
+          fs.writeFileSync(fp, 'x\n');
+          await g.snapshotFiles([fp]);
+          fs.rmSync(fp);
+          fs.mkdirSync(fp); // a directory took its place
+          const scan = await g.scanAgainstDisk([fp]);
+          assert.deepEqual(scan.unreadable, [fp]);
+          assert.deepEqual([...scan.differing, ...scan.deleted, ...scan.unchanged], []);
+        });
+      });
+
+      it('finds exactly the changed files among more than one batch', async () => {
+        await withRepo(async (g, root) => {
+          const paths: string[] = [];
+          for (let i = 0; i < 1100; i++) {
+            const fp = path.join(root, `d${i % 20}`, `f${i}.txt`);
+            fs.mkdirSync(path.dirname(fp), { recursive: true });
+            fs.writeFileSync(fp, `file ${i}\n`);
+            paths.push(fp);
+          }
+          await g.snapshotFiles(paths);
+          fs.writeFileSync(paths[3], 'edited\n');
+          fs.writeFileSync(paths[600], 'edited\n');
+          fs.rmSync(paths[1099]);
+
+          const scan = await g.scanAgainstDisk(paths);
+          assert.deepEqual(names(root, scan.differing), names(root, [paths[3], paths[600]]));
+          assert.deepEqual(scan.deleted, [paths[1099]]);
+          assert.equal(scan.unchanged.length, 1097);
+          assert.equal(scan.noBaseline.length + scan.unreadable.length, 0);
+        });
+      });
+
+      it('handles an empty list', async () => {
+        await withRepo(async g => {
+          const scan = await g.scanAgainstDisk([]);
+          assert.deepEqual(scan, { unchanged: [], differing: [], deleted: [], noBaseline: [], unreadable: [] });
+        });
+      });
     });
   });
 

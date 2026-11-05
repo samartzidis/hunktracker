@@ -5,6 +5,43 @@ import { FileState } from './types';
 import { HunktrackerGit } from './hunktrackerGit';
 import { log } from './log';
 import { normalizePath } from './pathNormalize';
+import { mapLimit } from './concurrency';
+import { ProgressReporter, type ProgressInfo } from './progress';
+
+/**
+ * Every file under `dir` that `shouldIgnore` lets through (ignored folders are not entered).
+ * `onCount` gets the number of files found so far after each folder, for progress display.
+ */
+async function collectWorkspaceFiles(
+  dir: string,
+  shouldIgnore: ((filePath: string, isDirectory?: boolean) => boolean) | undefined,
+  onCount?: (found: number) => void
+): Promise<string[]> {
+  const results: string[] = [];
+  const walk = async (current: string): Promise<void> => {
+    let entries: fs.Dirent[];
+    try {
+      entries = await fs.promises.readdir(current, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = normalizePath(path.join(current, entry.name));
+      const isDir = entry.isDirectory();
+      if (shouldIgnore?.(full, isDir)) continue;
+      if (isDir) await walk(full);
+      else if (entry.isFile()) results.push(full);
+    }
+    onCount?.(results.length);
+  };
+  await walk(dir);
+  return results;
+}
+
+/** Files read from disk at once when comparing the workspace with its baselines. */
+const DISK_READ_CONCURRENCY = 32;
+/** Baselines held in memory at once while classifying files that differ from them. */
+const BASELINE_CHUNK = 200;
 
 const DEFAULT_IGNORE_PATTERNS = process.platform === 'darwin' ? ['.git', '.DS_Store'] : ['.git'];
 
@@ -39,6 +76,14 @@ export class StateManager {
   // (e.g. exitReviewing snapshot fails and reviewing state is restored).
   // Set by the extension to trigger UI refresh after unexpected state restoration.
   onRollback: (() => void) | undefined;
+
+  /** Receives short progress texts while a long scan or snapshot runs (set by the extension). */
+  onProgress: ((text: string) => void) | undefined;
+  private readonly reporter = new ProgressReporter(text => this.onProgress?.(text));
+  private report(info: ProgressInfo): void { this.reporter.report(info); }
+  /** Call when a new long run starts, so its first progress report is shown. */
+  resetProgress(): void { this.reporter.reset(); }
+  private readonly savingProgress = (done: number, total: number): void => this.report({ phase: 'saving', done, total });
 
   /**
    * @param dataDir Per-workspace directory for settings.json and the private baseline repo
@@ -140,37 +185,12 @@ export class StateManager {
     await g.initGit();
     const tracked = await g.listTrackedFiles();
     const ignored: string[] = [];
-    const skippedNoBaseline: string[] = [];
-    const reviewing: string[] = [];
-    const idle: string[] = [];
-    await Promise.all(tracked.map(async filePath => {
-      if (shouldIgnore?.(filePath)) {
-        ignored.push(filePath);
-        return;
-      }
-      const baseline = await g.getBaseline(filePath);
-      if (baseline === undefined) {
-        skippedNoBaseline.push(filePath);
-        return;
-      }
-      // Compare baseline with current disk content — enter reviewing if there's a real diff
-      // or if the file has been deleted (so the user can restore it via discard).
-      // Use a single readFile call to avoid TOCTOU race (existsSync + readFile).
-      let diskContent: string | undefined;
-      let fileDeleted = false;
-      try {
-        diskContent = await fs.promises.readFile(filePath, 'utf-8');
-      } catch (err: any) {
-        if (err?.code === 'ENOENT') { fileDeleted = true; } // file doesn't exist
-        // other errors (e.g. permissions) → diskContent stays undefined, treat as idle
-      }
-      if (fileDeleted || (diskContent !== undefined && diskContent !== baseline)) {
-        this.state.set(filePath, { status: 'reviewing', baseline });
-        reviewing.push(filePath);
-      } else {
-        idle.push(filePath);
-      }
-    }));
+    const candidates: string[] = [];
+    for (const filePath of tracked) {
+      if (shouldIgnore?.(filePath)) ignored.push(filePath);
+      else candidates.push(filePath);
+    }
+    const { reviewing, idle, skippedNoBaseline } = await this.classifyTracked(g, candidates);
     if (skippedNoBaseline.length > 0) {
       log(`load: skipped ${skippedNoBaseline.length} file(s) with no baseline in index: ${logFileList(skippedNoBaseline, this.workspaceRoot)}`);
     }
@@ -195,6 +215,61 @@ export class StateManager {
         this.state.set(fp, { status: 'reviewing', baseline: null });
       }
     }
+  }
+
+  /**
+   * Put every tracked file into the right state by comparing the disk with its baseline: files
+   * with pending changes (and deleted files) become `reviewing` in `this.state`.
+   *
+   * Cheap for big workspaces: git hashes the disk files and compares them with the index
+   * (`scanAgainstDisk`), so baseline text is fetched only for files that differ or are gone, and
+   * in bounded chunks. Reading every baseline into memory, or starting a git process per file,
+   * stalls a machine on a repository with tens of thousands of files.
+   */
+  private async classifyTracked(
+    g: HunktrackerGit,
+    files: string[]
+  ): Promise<{ reviewing: string[]; idle: string[]; skippedNoBaseline: string[] }> {
+    const reviewing: string[] = [];
+    const idle: string[] = [];
+    const scan = await g.scanAgainstDisk(files, (done, total) => this.report({ phase: 'comparing', done, total }));
+    const skippedNoBaseline = [...scan.noBaseline];
+    idle.push(...scan.unchanged, ...scan.unreadable);
+
+    const deleted = new Set(scan.deleted);
+    const needContent = [...scan.deleted, ...scan.differing];
+    for (let i = 0; i < needContent.length; i += BASELINE_CHUNK) {
+      const chunk = needContent.slice(i, i + BASELINE_CHUNK);
+      this.report({ phase: 'checking', done: i, total: needContent.length });
+      const baselines = await g.getBaselines(chunk);
+      await mapLimit(chunk, DISK_READ_CONCURRENCY, async filePath => {
+        const baseline = baselines.get(filePath);
+        if (baseline === undefined) {
+          skippedNoBaseline.push(filePath);
+          return;
+        }
+        // Different bytes are not always different text (a file with invalid UTF-8 decodes to the
+        // same string as its lossy baseline), so compare the decoded text as before. A single
+        // readFile avoids a TOCTOU race (existsSync + readFile).
+        let diskContent: string | undefined;
+        let fileDeleted = deleted.has(filePath);
+        if (!fileDeleted) {
+          try {
+            diskContent = await fs.promises.readFile(filePath, 'utf-8');
+          } catch (err: any) {
+            if (err?.code === 'ENOENT') fileDeleted = true;
+            // other errors (e.g. permissions) → diskContent stays undefined, treat as idle
+          }
+        }
+        if (fileDeleted || (diskContent !== undefined && diskContent !== baseline)) {
+          this.state.set(filePath, { status: 'reviewing', baseline });
+          reviewing.push(filePath);
+        } else {
+          idle.push(filePath);
+        }
+      });
+    }
+    return { reviewing, idle, skippedNoBaseline };
   }
 
   /**
@@ -224,20 +299,7 @@ export class StateManager {
     await g.initGit();
     const tracked = await g.listTrackedFiles();
     const filtered = tracked.filter(fp => !shouldIgnore?.(fp));
-    await Promise.all(filtered.map(async filePath => {
-      const baseline = await g.getBaseline(filePath);
-      if (baseline === undefined) return;
-      let diskContent: string | undefined;
-      let fileDeleted = false;
-      try {
-        diskContent = await fs.promises.readFile(filePath, 'utf-8');
-      } catch (err: any) {
-        if (err?.code === 'ENOENT') { fileDeleted = true; }
-      }
-      if (fileDeleted || (diskContent !== undefined && diskContent !== baseline)) {
-        this.state.set(filePath, { status: 'reviewing', baseline });
-      }
-    }));
+    await this.classifyTracked(g, filtered);
 
     // Detect files on disk not tracked in git — these are externally created new files
     const trackedSet = new Set(tracked);
@@ -453,41 +515,15 @@ export class StateManager {
     const g = this._git;
     if (!g || !this.workspaceRoot) return;
 
-    const collect = async (dir: string): Promise<string[]> => {
-      let results: string[] = [];
-      let entries: fs.Dirent[];
-      try {
-        entries = await fs.promises.readdir(dir, { withFileTypes: true });
-      } catch {
-        return results;
-      }
-      for (const entry of entries) {
-        const full = normalizePath(path.join(dir, entry.name));
-        const isDir = entry.isDirectory();
-        if (shouldIgnore(full, isDir)) continue;
-        if (isDir) {
-          results = results.concat(await collect(full));
-        } else if (entry.isFile()) {
-          results.push(full);
-        }
-      }
-      return results;
-    };
+    const collect = (dir: string) => collectWorkspaceFiles(dir, shouldIgnore, found => this.report({ phase: 'scanning', done: found }));
 
     const filePaths = await collect(this.workspaceRoot);
-    const batch: { filePath: string; content: string }[] = [];
-    await Promise.all(filePaths.map(async filePath => {
-      try {
-        const content = await fs.promises.readFile(filePath, 'utf-8');
-        batch.push({ filePath, content });
-      } catch {
-        // Skip binary or unreadable files
-      }
-    }));
-    if (batch.length > 0) {
-      // Go through the queue: a direct call races syncIgnoreState's queued snapshotBatch
+    log(`snapshotWorkspace: ${filePaths.length} file(s)`);
+    if (filePaths.length > 0) {
+      // Go through the queue: a direct call races syncIgnoreState's queued snapshot
       // (same index), and the loser fails with "index.lock: File exists", leaving no baselines.
-      this.gitQueue = this.gitQueue.then(() => g.snapshotBatch(batch)).catch(err => { log(`git queue error: ${err}`); });
+      // git reads and hashes the files itself (a few processes in total); unreadable ones are skipped.
+      this.gitQueue = this.gitQueue.then(() => g.snapshotFiles(filePaths, this.savingProgress)).catch(err => { log(`git queue error: ${err}`); });
     }
     await this.gitQueue;
   }
@@ -558,26 +594,13 @@ export class StateManager {
     const g = this._git;
     if (!g || !this.workspaceRoot) return;
 
-    const collect = async (dir: string): Promise<string[]> => {
-      let results: string[] = [];
-      let entries: fs.Dirent[];
-      try {
-        entries = await fs.promises.readdir(dir, { withFileTypes: true });
-      } catch {
-        return results;
-      }
-      for (const entry of entries) {
-        const full = normalizePath(path.join(dir, entry.name));
-        const isDir = entry.isDirectory();
-        if (shouldIgnore(full, isDir)) continue;
-        if (isDir) {
-          results = results.concat(await collect(full));
-        } else if (entry.isFile()) {
-          results.push(full);
-        }
-      }
-      return results;
-    };
+    const collect = (dir: string) => collectWorkspaceFiles(dir, shouldIgnore, found => this.report({ phase: 'scanning', done: found }));
+
+    // Let queued baseline writes land before deciding what is untracked. Files snapshotted by an
+    // earlier operation (Enable) show up in HEAD only after their commit; without this wait they
+    // would be queued for a second snapshot, and git reads the disk only when that job runs, so
+    // edits made in the meantime would be adopted as the baseline instead of showing as hunks.
+    await this.gitQueue;
 
     const [allowedFiles, trackedFiles] = await Promise.all([
       collect(this.workspaceRoot),
@@ -621,16 +644,15 @@ export class StateManager {
       log(`syncIgnoreState: adding ${toAdd.length} file(s): ${logFileList(toAdd, this.workspaceRoot)}`);
     }
     if (toAdd.length > 0) {
-      const batch: { filePath: string; content: string }[] = [];
-      await Promise.all(toAdd.map(async fp => {
-        try {
-          const content = await fs.promises.readFile(fp, 'utf-8');
-          batch.push({ filePath: fp, content });
-        } catch { /* skip unreadable */ }
-      }));
-      if (batch.length > 0) {
-        this.gitQueue = this.gitQueue.then(() => g.snapshotBatch(batch)).catch(err => { log(`git queue error: ${err}`); });
-      }
+      // Decide again when the job actually runs. The queue runs one job at a time, so by then an
+      // earlier job (Enable's snapshot of the same files) has been committed and is in HEAD.
+      // Judging only from the HEAD read above would snapshot those files a second time, and git
+      // reads the disk when the job runs: edits made since would be adopted as the baseline.
+      this.gitQueue = this.gitQueue.then(async () => {
+        const nowTracked = new Set(await g.listTrackedFiles());
+        const stillMissing = toAdd.filter(fp => !nowTracked.has(fp) && !this.state.has(fp));
+        if (stillMissing.length > 0) await g.snapshotFiles(stillMissing, this.savingProgress);
+      }).catch(err => { log(`git queue error: ${err}`); });
     }
 
     // Wait for all queued git operations to complete
@@ -655,41 +677,15 @@ export class StateManager {
     this.state.clear();
 
     // Collect all current workspace files (respecting ignore rules)
-    const collect = async (dir: string): Promise<string[]> => {
-      let results: string[] = [];
-      let entries: fs.Dirent[];
-      try {
-        entries = await fs.promises.readdir(dir, { withFileTypes: true });
-      } catch {
-        return results;
-      }
-      for (const entry of entries) {
-        const full = normalizePath(path.join(dir, entry.name));
-        const isDir = entry.isDirectory();
-        if (shouldIgnore?.(full, isDir)) continue;
-        if (isDir) {
-          results = results.concat(await collect(full));
-        } else if (entry.isFile()) {
-          results.push(full);
-        }
-      }
-      return results;
-    };
+    const collect = (dir: string) => collectWorkspaceFiles(dir, shouldIgnore, found => this.report({ phase: 'scanning', done: found }));
 
     const [diskFiles, trackedFiles] = await Promise.all([
       collect(this.workspaceRoot),
       g.listTrackedFiles(),
     ]);
 
-    // Snapshot all disk files as new baselines
+    // Snapshot all disk files as new baselines (git reads and hashes them itself)
     const diskSet = new Set(diskFiles);
-    const batch: { filePath: string; content: string }[] = [];
-    await Promise.all(diskFiles.map(async fp => {
-      try {
-        const content = await fs.promises.readFile(fp, 'utf-8');
-        batch.push({ filePath: fp, content });
-      } catch { /* skip unreadable */ }
-    }));
 
     // Remove baselines for files that no longer exist on disk
     const toRemove = trackedFiles.filter(fp => !diskSet.has(fp));
@@ -697,8 +693,8 @@ export class StateManager {
     if (toRemove.length > 0) {
       this.gitQueue = this.gitQueue.then(() => g.removeFileBatch(toRemove)).catch(err => { log(`git queue error: ${err}`); });
     }
-    if (batch.length > 0) {
-      this.gitQueue = this.gitQueue.then(() => g.snapshotBatch(batch)).catch(err => { log(`git queue error: ${err}`); });
+    if (diskFiles.length > 0) {
+      this.gitQueue = this.gitQueue.then(() => g.snapshotFiles(diskFiles, this.savingProgress)).catch(err => { log(`git queue error: ${err}`); });
     }
 
     // Wait for all git ops to complete before returning

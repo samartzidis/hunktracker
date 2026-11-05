@@ -17,6 +17,7 @@
     "src/fileOrder.ts",
     "src/hunktrackerGit.ts",
     "src/pathNormalize.ts",
+    "src/progress.ts",
     "src/storageCleanup.ts",
     "src/proposedApi.ts"
   ],
