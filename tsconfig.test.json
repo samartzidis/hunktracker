@@ -11,6 +11,7 @@
   },
   "include": [
     "src/test/**/*.ts",
+    "src/changeStrip.ts",
     "src/containerOptions.ts",
     "src/diffEngine.ts",
     "src/fileOrder.ts",
