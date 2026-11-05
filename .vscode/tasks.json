@@ -54,7 +54,7 @@
       "presentation": {
         "reveal": "silent"
       },
-      "problemMatcher": "$tsc-watch"
+      "problemMatcher": []
     },
     {
       "label": "Test: Unit tests",

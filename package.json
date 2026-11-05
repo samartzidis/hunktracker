@@ -175,12 +175,13 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm run typecheck && node esbuild.js --production",
     "clean": "node -e \"const fs=require('fs');for(const d of ['out','out-test','out-integration'])fs.rmSync(d,{recursive:true,force:true});for(const f of fs.readdirSync('.'))if(f.endsWith('.vsix'))fs.rmSync(f)\"",
     "clean:all": "npm run clean && node -e \"for(const d of ['node_modules','.vscode-test'])require('fs').rmSync(d,{recursive:true,force:true,maxRetries:3})\"",
     "dev:clean-profile": "node -e \"require('fs').rmSync(require('path').join(require('os').tmpdir(),'hunktracker-dev-profile'),{recursive:true,force:true,maxRetries:3})\"",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
+    "typecheck": "tsc -p ./ --noEmit",
+    "compile": "npm run typecheck && node esbuild.js",
+    "watch": "node esbuild.js --watch",
     "package": "npx --yes @vscode/vsce package --allow-missing-repository",
     "install:vsix": "node -e \"const {name,version}=require('./package.json');require('child_process').execSync('code --install-extension '+name+'-'+version+'.vsix --force',{stdio:'inherit'})\"",
     "uninstall:vsix": "code --uninstall-extension GeorgeSamartzidis.hunktracker",
@@ -194,11 +195,10 @@
     "@types/vscode": "^1.90.0",
     "@vscode/test-cli": "^0.0.12",
     "@vscode/test-electron": "^2.5.2",
-    "typescript": "^5.x"
-  },
-  "dependencies": {
     "diff": "^5.2.0",
+    "esbuild": "^0.28.2",
     "ignore": "^7.0.5",
-    "isomorphic-git": "1.44.11"
+    "isomorphic-git": "1.44.11",
+    "typescript": "^5.x"
   }
 }
