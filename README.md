@@ -2,7 +2,7 @@
 
 Review in-line file changes made in Visual Studio Code by AI coding assistants like [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Every changed block gets its own Accept and Discard bar inline in the editor.
 
-![Hunk Tracker screenshot](docs/screenshot.png =640x)
+<img src="docs/screenshot.png" alt="Hunk Tracker screenshot" width="640">
 
 ## Features
 
