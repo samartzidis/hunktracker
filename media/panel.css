@@ -589,6 +589,19 @@ body {
 .strip-removed { background: #f85149; }
 /* both removed and added lines: top half red, bottom half green */
 .strip-changed { background: linear-gradient(#f85149 50%, #3fb950 50%); }
+/* Frame around the lines the active editor shows. The foreground colour is light in dark
+   themes and dark in light themes. Inset shadow because the strip clips its overflow. */
+.strip-viewport {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  min-width: 4px;
+  box-sizing: border-box;
+  box-shadow: inset 0 0 0 1px var(--vscode-foreground);
+  background: color-mix(in srgb, var(--vscode-foreground) 15%, transparent);
+  pointer-events: none;
+}
+.strip-viewport[hidden] { display: none; }
 /* No room in a narrow side bar: drop the strip rather than squeeze the file name */
 @media (max-width: 260px) {
   .file-strip { display: none; }

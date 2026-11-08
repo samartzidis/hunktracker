@@ -479,6 +479,27 @@ function renderReviewScreen(state) {
   }
 }
 
+/** Lines the active editor shows: { filePath, firstLine, lastLine } (0-based, inclusive) or null. */
+let editorViewport = null;
+
+/** Show or hide the viewport frame on one strip according to `editorViewport`. */
+function placeViewport(strip) {
+  const frame = strip.querySelector('.strip-viewport');
+  if (!frame) return;
+  const total = Number(strip.dataset.total);
+  const vp = editorViewport;
+  if (!vp || vp.filePath !== strip.dataset.path || !(total > 0) || vp.lastLine < vp.firstLine) {
+    frame.hidden = true;
+    return;
+  }
+  const clamp = x => Math.min(1, Math.max(0, x));
+  const start = clamp(vp.firstLine / total);
+  const end = Math.max(start, clamp((vp.lastLine + 1) / total));
+  frame.style.left = `min(${(start * 100).toFixed(2)}%, calc(100% - 4px))`;
+  frame.style.width = `${((end - start) * 100).toFixed(2)}%`;
+  frame.hidden = false;
+}
+
 /**
  * Thin bar standing for the whole file, with a mark where each pending change sits.
  * Purely visual: the marks ignore the pointer, so a click on the strip is a click on the row.
@@ -492,6 +513,16 @@ function changeStrip(file) {
     mark.style.left = `min(${(m.start * 100).toFixed(2)}%, calc(100% - 2px))`;
     mark.style.width = `${((m.end - m.start) * 100).toFixed(2)}%`;
     strip.appendChild(mark);
+  }
+  if (!file.isDeleted) {
+    // Frame around the part of the file the active editor shows; moved by `viewport` messages
+    // without a re-render, so it is also placed here for a freshly built strip
+    strip.dataset.path = file.filePath;
+    strip.dataset.total = String(file.totalLines);
+    const frame = el('span', 'strip-viewport');
+    frame.hidden = true;
+    strip.appendChild(frame);
+    placeViewport(strip);
   }
   const lines = file.totalLines === 1 ? '1 line' : `${file.totalLines} lines`;
   strip.title = file.isDeleted ? `Deleted file (${lines})`
@@ -636,6 +667,9 @@ window.addEventListener('message', event => {
     } else {
       render(msg.state);
     }
+  } else if (msg.type === 'viewport') {
+    editorViewport = msg.viewport || null;
+    document.querySelectorAll('.file-strip').forEach(placeViewport);
   } else if (msg.type === 'openSettings') {
     view = 'settings';
     if (currentState) render(currentState);

@@ -166,6 +166,7 @@ export class ReviewPanel implements vscode.WebviewViewProvider {
           if (this._loadingText) this.view?.webview.postMessage({ type: 'loadingText', text: this._loadingText });
         } else {
           this.refresh();
+          this.postViewport();
         }
         return;
       }
@@ -271,6 +272,28 @@ export class ReviewPanel implements vscode.WebviewViewProvider {
     // never resolved this session.
     void Promise.resolve(vscode.commands.executeCommand('hunktrackerToolbar.focus', { preserveFocus: true }))
       .catch(err => log(`autoRevealPanel: reveal failed: ${err}`));
+  }
+
+  /** What the active editor shows, for the frame on the file's position strip. null = no file editor. */
+  private _viewport: { filePath: string; firstLine: number; lastLine: number } | null = null;
+  private _viewportTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /**
+   * Tell the panel which lines of which file the active editor shows. Scroll events come
+   * in bursts, so they are coalesced: one message at most every 40 ms. The webview only
+   * moves one frame, it does not rebuild the list.
+   */
+  setViewport(viewport: { filePath: string; firstLine: number; lastLine: number } | null): void {
+    this._viewport = viewport;
+    if (this._viewportTimer) return;
+    this._viewportTimer = setTimeout(() => {
+      this._viewportTimer = undefined;
+      this.postViewport();
+    }, 40);
+  }
+
+  private postViewport(): void {
+    this.view?.webview.postMessage({ type: 'viewport', viewport: this._viewport });
   }
 
   /** Progress line under "Initializing…" (e.g. "Saving baselines… 3,000 / 48,000"); '' = none yet. */

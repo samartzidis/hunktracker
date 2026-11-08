@@ -152,6 +152,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<{ getR
     }
   });
 
+  // The part of the file the active editor shows, drawn as a frame on that file's strip in the panel
+  const reportViewport = (editor: vscode.TextEditor | undefined) => {
+    const ranges = editor?.visibleRanges;
+    if (!editor || editor.document.uri.scheme !== 'file' || !ranges || ranges.length === 0) {
+      reviewPanel?.setViewport(null);
+      return;
+    }
+    reviewPanel?.setViewport({
+      filePath: editor.document.uri.fsPath,
+      firstLine: ranges[0].start.line,
+      lastLine: ranges[ranges.length - 1].end.line,
+    });
+  };
+
   context.subscriptions.push(
     vscode.window.onDidChangeVisibleTextEditors(editors => {
       decorationManager?.refresh(editors);
@@ -160,6 +174,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<{ getR
     vscode.window.onDidChangeActiveTextEditor(editor => {
       if (editor) decorationManager?.refresh([editor]);
       diffCodeLensProvider?.fire();
+      reportViewport(editor);
+    }),
+    vscode.window.onDidChangeTextEditorVisibleRanges(e => {
+      if (e.textEditor === vscode.window.activeTextEditor) reportViewport(e.textEditor);
     }),
     vscode.workspace.onDidChangeTextDocument(e => {
       if (e.document.uri.scheme !== 'file') return;
@@ -172,6 +190,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<{ getR
   );
 
   reviewPanel = new ReviewPanel(context, stateManager, fileWatcher, onStateChanged, fireBaselineChange, closeStaleTabs);
+  reportViewport(vscode.window.activeTextEditor);
   // Long scans and snapshots report here, shown under "Initializing…" so a big repo does not look hung
   stateManager.onProgress = text => reviewPanel?.setLoadingText(text);
   // The inline hunk controls need the editorInsets proposal, which VS Code only allows
