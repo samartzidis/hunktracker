@@ -4,7 +4,7 @@
   "author": "George Samartzidis",
   "displayName": "Hunk Tracker",
   "description": "Per-hunk Accept/Discard for any file change",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -65,6 +65,10 @@
       {
         "command": "hunktracker.disable",
         "title": "Hunk Tracker: Disable"
+      },
+      {
+        "command": "hunktracker.showPanel",
+        "title": "Hunk Tracker: Show Panel"
       },
       {
         "command": "hunktracker.openSettings",

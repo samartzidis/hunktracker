@@ -12,6 +12,7 @@ import { initLog, log } from './log';
 import { probeProposedApi } from './proposedApi';
 import { getUserSetting, getGlobalIgnorePatterns } from './userSettings';
 import { sweepOrphanedStorage, describeSweep } from './storageCleanup';
+import { StatusBarItem, SHOW_PANEL_COMMAND } from './statusBar';
 
 export async function activate(context: vscode.ExtensionContext): Promise<{ getReviewPanel: () => ReviewPanel | undefined; getStateManager: () => StateManager | undefined; getFileWatcher: () => FileWatcher | undefined }> {
   initLog();
@@ -40,9 +41,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<{ getR
   let decorationManager: DecorationManager | undefined;
   let reviewPanel: ReviewPanel | undefined;
   let diffCodeLensProvider: DiffCodeLensProvider | undefined;
+  const statusBarItem = new StatusBarItem(stateManager);
+  context.subscriptions.push(
+    statusBarItem,
+    vscode.commands.registerCommand(SHOW_PANEL_COMMAND, () => vscode.commands.executeCommand('hunktrackerToolbar.focus')),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => statusBarItem.refresh())
+  );
 
   // Original state-changed callback — no diff-editor side effects
   function onStateChanged(): void {
+    statusBarItem.refresh();
     decorationManager?.refresh();
     reviewPanel?.refresh();
     diffCodeLensProvider?.fire();
