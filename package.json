@@ -4,7 +4,7 @@
   "author": "George Samartzidis",
   "displayName": "Hunk Tracker",
   "description": "Per-hunk Accept/Discard for any file change",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "license": "MIT",
   "repository": {
     "type": "git",
