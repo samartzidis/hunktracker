@@ -227,32 +227,45 @@ suite('hunktracker file watcher integration', function () {
     assert.strictEqual(fileState?.baseline, null, 'New file should still have null baseline after refresh');
   });
 
-  test('refresh preserves binary files detected by FileWatcher as new', async () => {
+  test('binary files are never tracked: not on Enable, not when created, not after refresh', async () => {
     const root = getWorkspaceRoot();
+    const before = path.join(root, 'before.exe');
+    fs.writeFileSync(before, Buffer.from([0x4d, 0x5a, 0x90, 0x00, 0x03, 0x00]));
     await enableHunktracker();
 
-    // Create a binary file externally (e.g. .xlsx dragged from Finder)
+    // Create a binary file externally (e.g. .xlsx dragged from Finder), then a text file, whose
+    // arrival shows the watcher has caught up
     const binaryFile = path.join(root, 'report.xlsx');
-    const binaryContent = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00, 0x08, 0x00]);
-    fs.writeFileSync(binaryFile, binaryContent);
+    fs.writeFileSync(binaryFile, Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00, 0x08, 0x00]));
+    const textFile = path.join(root, 'after-binary.txt');
+    writeFileExternally(textFile, 'text\n');
 
     const sm = getStateManager();
-    assert.ok(sm, 'StateManager should be available');
+    await waitForCondition(() => sm.getFile(textFile)?.status === 'reviewing', 8000);
+    await sleep(500);
+    assert.strictEqual(sm.getFile(binaryFile), undefined, 'a new binary file must not show up');
 
-    // Wait for FileWatcher to detect and enter reviewing with null baseline
-    await waitForCondition(() => {
-      const f = sm.getFile(binaryFile);
-      return f?.status === 'reviewing' && f?.baseline === null;
-    }, 8000);
-
-    // Execute refresh
     await vscode.commands.executeCommand('hunktracker.refresh');
+    assert.strictEqual(sm.getFile(binaryFile), undefined, 'refresh must not list a binary file as new');
+    assert.strictEqual(sm.getFile(before), undefined, 'refresh must not list a binary file as new');
+    assert.ok(sm.getFile(textFile), 'the text file is still pending');
+    const tracked = gitListTracked(root);
+    assert.ok(!tracked.includes('before.exe') && !tracked.includes('report.xlsx'), `binary baselines: ${tracked.join(', ')}`);
+  });
 
-    // Binary file should STILL be in state — consistent with onDiskCreate behavior
-    const fileState = sm.getFile(binaryFile);
-    assert.ok(fileState, 'Binary file should still exist in state after refresh');
-    assert.strictEqual(fileState?.status, 'reviewing', 'Binary file should still be reviewing');
-    assert.strictEqual(fileState?.baseline, null, 'Binary file should still have null baseline');
+  test('a tracked text file that becomes binary is forgotten: no pending changes, no baseline', async () => {
+    const root = getWorkspaceRoot();
+    const fp = path.join(root, 'turns-binary.dat');
+    writeFileExternally(fp, 'line 1\n');
+    await enableHunktracker();
+    await waitForCondition(() => gitListTracked(root).includes('turns-binary.dat'), 8000);
+
+    writeFileExternally(fp, 'line 1\nline 2\n');
+    await waitForCondition(() => getStateManager().getFile(fp)?.status === 'reviewing', 8000);
+
+    fs.writeFileSync(fp, Buffer.from([0x01, 0x00, 0x02, 0x00]));
+    await waitForCondition(() => getStateManager().getFile(fp) === undefined, 10000, 200);
+    await waitForCondition(() => !gitListTracked(root).includes('turns-binary.dat'), 10000, 200);
   });
 
   test('externally created empty files enter reviewing with null baseline', async () => {

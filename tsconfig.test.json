@@ -15,6 +15,7 @@
     "src/changeStrip.ts",
     "src/containerOptions.ts",
     "src/diffEngine.ts",
+    "src/fileLimits.ts",
     "src/fileOrder.ts",
     "src/hunktrackerGit.ts",
     "src/pathNormalize.ts",

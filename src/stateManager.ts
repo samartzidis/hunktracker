@@ -7,7 +7,7 @@ import { log } from './log';
 import { normalizePath } from './pathNormalize';
 import { mapLimit } from './concurrency';
 import { mergeIgnorePatterns } from './ignorePatterns';
-import { isOverSizeLimit } from './fileLimits';
+import { isOverSizeLimit, isFileBinary } from './fileLimits';
 import { ProgressReporter, type ProgressInfo } from './progress';
 
 /**
@@ -42,6 +42,8 @@ async function collectWorkspaceFiles(
 
 /** Files compared with their baseline text at once (each holds its baseline and disk text in memory). */
 const DISK_READ_CONCURRENCY = 32;
+/** Files whose beginning is read at once to tell binary files apart. */
+const BINARY_CHECK_CONCURRENCY = 32;
 
 // .git is excluded by the file watcher itself (see isInsideDotGit); a new project starts with no patterns
 const DEFAULT_IGNORE_PATTERNS: string[] = [];
@@ -120,6 +122,8 @@ export class StateManager {
   /**
    * Walk workspace and collect files that exist on disk but are not tracked in git.
    * These are externally created new files that should be shown with null baseline.
+   * Files over the size limit and binary files are left out: they are never tracked. A binary file
+   * never gets a baseline, so its beginning is read again on every run of this walk.
    */
   private async collectUntrackedFiles(
     trackedSet: Set<string>,
@@ -157,7 +161,11 @@ export class StateManager {
       }
       return results;
     };
-    return collect(root);
+    const candidates = await collect(root);
+    const binary = await mapLimit(candidates, BINARY_CHECK_CONCURRENCY, fp => isFileBinary(fp));
+    const skipped = binary.filter(Boolean).length;
+    if (skipped > 0) log(`${skipped} binary file(s) without a baseline: not tracked`);
+    return candidates.filter((_, i) => !binary[i]);
   }
 
   // ── init / load ───────────────────────────────────────────────────────────
@@ -261,11 +269,17 @@ export class StateManager {
     const idle: string[] = [];
     const scan = await g.scanAgainstDisk(files, (done, total) => this.report({ phase: 'comparing', done, total }));
     const skippedNoBaseline = [...scan.noBaseline];
-    // Files over the size limit are not tracked: a baseline taken while a file was smaller is dropped
+    // Files over the size limit and binary files are not tracked: a baseline taken while a file was
+    // smaller (or text, or before binary files were left out) is dropped
     if (scan.tooLarge.length > 0) {
       log(`${scan.tooLarge.length} file(s) grew over the size limit, no longer tracked: ${logFileList(scan.tooLarge, this.workspaceRoot)}`);
-      const tooLarge = scan.tooLarge;
-      this.gitQueue = this.gitQueue.then(() => g.removeFileBatch(tooLarge)).catch(err => { log(`git queue error: ${err}`); });
+    }
+    if (scan.binary.length > 0) {
+      log(`${scan.binary.length} binary file(s), no longer tracked: ${logFileList(scan.binary, this.workspaceRoot)}`);
+    }
+    const untrackable = [...scan.tooLarge, ...scan.binary];
+    if (untrackable.length > 0) {
+      this.gitQueue = this.gitQueue.then(() => g.removeFileBatch(untrackable)).catch(err => { log(`git queue error: ${err}`); });
     }
     idle.push(...scan.unchanged, ...scan.unreadable);
 

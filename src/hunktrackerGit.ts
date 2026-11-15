@@ -8,7 +8,7 @@ import { normalizePath, toGitRelPath } from './pathNormalize';
 import { mkdirRetry, removeDirSync } from './fsUtil';
 import { mapLimit } from './concurrency';
 import { withoutBuiltInPatterns } from './ignorePatterns';
-import { isOverSizeLimit, MAX_TRACKED_FILE_BYTES } from './fileLimits';
+import { isOverSizeLimit, looksBinary, BINARY_CHECK_BYTES, MAX_TRACKED_FILE_BYTES } from './fileLimits';
 
 /** Files read, hashed and stored at the same time while taking baselines: bounds memory to a few files. */
 const SNAPSHOT_CONCURRENCY = 8;
@@ -50,6 +50,11 @@ export interface DiskScan {
   unreadable: string[];
   /** Has a baseline, but the file has grown over the size limit: it is no longer tracked. */
   tooLarge: string[];
+  /**
+   * Has a baseline, but the file on disk is binary (see fileLimits.ts): it is no longer tracked. Only
+   * files that were read are checked; one settled by its size and modified time is not.
+   */
+  binary: string[];
   /** How many files had to be read and hashed (the rest were settled by size and modified time). */
   hashed: number;
 }
@@ -75,20 +80,26 @@ function plainFileStats() {
   return { ctimeSeconds: 0, ctimeNanoseconds: 0, mtimeSeconds: 0, mtimeNanoseconds: 0, dev: 0, ino: 0, mode: FILE_MODE, uid: 0, gid: 0, size: 0 };
 }
 
-/** The git blob id of `size` bytes streamed from `filePath`, or undefined if the file cannot be read in full. */
-function hashFileAsBlob(filePath: string, size: number): Promise<string | undefined> {
+/**
+ * The git blob id of `size` bytes streamed from `filePath`, and whether the file is binary (judged from
+ * the same bytes, see fileLimits.ts), or undefined if the file cannot be read in full.
+ */
+function hashFileAsBlob(filePath: string, size: number): Promise<{ oid: string; binary: boolean } | undefined> {
   return new Promise(resolve => {
     const hash = crypto.createHash('sha1');
     hash.update(`blob ${size}\0`);
     let read = 0;
+    let binary = false;
     const stream = fs.createReadStream(filePath);
-    stream.on('data', chunk => {
+    stream.on('data', data => {
+      const chunk = data as Buffer;
+      if (!binary && read < BINARY_CHECK_BYTES) binary = looksBinary(chunk.subarray(0, BINARY_CHECK_BYTES - read));
       read += chunk.length;
       hash.update(chunk);
     });
     stream.on('error', () => resolve(undefined));
     // A file that grew or shrank while it was read cannot be compared reliably
-    stream.on('end', () => resolve(read === size ? hash.digest('hex') : undefined));
+    stream.on('end', () => resolve(read === size ? { oid: hash.digest('hex'), binary } : undefined));
   });
 }
 
@@ -341,8 +352,9 @@ export class HunktrackerGit {
 
   /**
    * Take baselines of files as they are on disk. The bytes are stored unmodified (no line-ending or
-   * other conversion). Files that cannot be read (deleted meanwhile, permissions) and files over the
-   * size limit (see fileLimits.ts) are skipped. Files are read and stored a few at a time, so memory
+   * other conversion). Files that cannot be read (deleted meanwhile, permissions) are skipped. Files
+   * over the size limit and binary files (see fileLimits.ts) are not tracked: they are skipped and a
+   * baseline they had from before is dropped. Files are read and stored a few at a time, so memory
    * stays small however big the workspace is, and all of them are recorded with one index write
    * (every index write rewrites the whole file). `onProgress` is called after each file.
    */
@@ -352,6 +364,8 @@ export class HunktrackerGit {
     if (!this.canWrite('snapshotFiles')) return;
     let unreadable = 0;
     let tooLarge = 0;
+    let binary = 0;
+    const untrackable: string[] = [];
     try {
       let done = 0;
       onProgress?.(0, filePaths.length);
@@ -361,9 +375,16 @@ export class HunktrackerGit {
           if (!stats.isFile()) return undefined;
           if (isOverSizeLimit(stats.size)) {
             tooLarge++;
+            untrackable.push(toGitRelPath(this.workTree, fp));
             return undefined;
           }
-          const oid = await this.writeBlob(await fs.promises.readFile(fp));
+          const content = await fs.promises.readFile(fp);
+          if (looksBinary(content)) {
+            binary++;
+            untrackable.push(toGitRelPath(this.workTree, fp));
+            return undefined;
+          }
+          const oid = await this.writeBlob(content);
           return { rel: toGitRelPath(this.workTree, fp), oid, stats };
         } catch {
           unreadable++;
@@ -373,13 +394,17 @@ export class HunktrackerGit {
         }
       });
       const entries = stored.filter((e): e is NonNullable<typeof e> => e !== undefined);
-      if (entries.length > 0) {
+      if (entries.length > 0 || untrackable.length > 0) {
         await this.withIndex(index => {
           for (const { rel, oid, stats } of entries) index.insert({ filepath: rel, oid, stats });
+          for (const rel of untrackable) {
+            if (index.has({ filepath: rel })) index.delete({ filepath: rel });
+          }
         });
       }
       if (unreadable > 0) this.log(`snapshotFiles: skipped ${unreadable} unreadable file(s) of ${filePaths.length}`);
       if (tooLarge > 0) this.log(`snapshotFiles: skipped ${tooLarge} file(s) over the size limit of ${MAX_TRACKED_FILE_BYTES / (1024 * 1024)} MB`);
+      if (binary > 0) this.log(`snapshotFiles: skipped ${binary} binary file(s)`);
     } catch (err) {
       this.log(`snapshotFiles failed (${filePaths.length} files): ${err}`);
     }
@@ -415,7 +440,7 @@ export class HunktrackerGit {
    */
   async scanAgainstDisk(filePaths: string[], onProgress?: (done: number, total: number) => void): Promise<DiskScan> {
     await this.initGit();
-    const scan: DiskScan = { unchanged: [], differing: [], deleted: [], noBaseline: [], unreadable: [], tooLarge: [], hashed: 0 };
+    const scan: DiskScan = { unchanged: [], differing: [], deleted: [], noBaseline: [], unreadable: [], tooLarge: [], binary: [], hashed: 0 };
     const rels = filePaths.map(fp => toGitRelPath(this.workTree, fp));
     const entries = await this.lookupEntries(rels);
     let indexWrittenMs = 0;
@@ -466,7 +491,8 @@ export class HunktrackerGit {
     toHash.forEach((c, j) => {
       const hash = hashes[j];
       if (hash === undefined) scan.unreadable.push(c.fp);
-      else if (hash === c.oid) {
+      else if (hash.binary) scan.binary.push(c.fp);
+      else if (hash.oid === c.oid) {
         scan.unchanged.push(c.fp);
         refresh.push(c);
       } else scan.differing.push(c.fp);
