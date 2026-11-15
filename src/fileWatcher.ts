@@ -9,7 +9,7 @@ import { computeHunks } from './diffEngine';
 import { log } from './log';
 import { normalizePath } from './pathNormalize';
 import { isInsideDotGit } from './ignorePatterns';
-import { isFileOverSizeLimit } from './fileLimits';
+import { untrackableReason, describeUntrackable, type UntrackableReason } from './fileLimits';
 
 // Transform gitignore rules from a sub-directory so they work in a single
 // root-level matcher. Adds the directory's relative path as prefix, handling
@@ -289,14 +289,15 @@ export class FileWatcher {
   }
 
   /**
-   * A file over the size limit is not tracked. If it was (it grew past the limit), drop its pending
-   * changes and its baseline, so neither the panel nor a later startup scan works on it.
+   * A file over the size limit or a binary file is not tracked. If it was (it grew past the limit or
+   * became binary), drop its pending changes and its baseline, so neither the panel nor a later startup
+   * scan works on it.
    */
-  private forgetOversizeFile(filePath: string): void {
+  private forgetUntrackableFile(filePath: string, reason: UntrackableReason): void {
     const hadState = this.stateManager.getFile(filePath) !== undefined;
     this.stateManager.removeFile(filePath);
     if (hadState) {
-      log(`${path.basename(filePath)}: over the size limit, no longer tracked`);
+      log(`${path.basename(filePath)}: ${describeUntrackable(reason)}, no longer tracked`);
       this.onStateChanged();
     }
   }
@@ -309,8 +310,9 @@ export class FileWatcher {
     if (!this.stateManager.enabled) return;
     if (this.shouldIgnore(filePath)) return;
     if (this.selfEditFiles.has(filePath)) return;
-    // Over the size limit: not tracked, so never read into memory (and forgotten if it was tracked)
-    if (await isFileOverSizeLimit(filePath)) { this.forgetOversizeFile(filePath); return; }
+    // Over the size limit or binary: not tracked, so never read whole (and forgotten if it was tracked)
+    const untrackable = await untrackableReason(filePath);
+    if (untrackable) { this.forgetUntrackableFile(filePath, untrackable); return; }
 
     const fileState = this.stateManager.getFile(filePath);
     log(`onDiskCreate(${basename}): fileState=${fileState ? `{status:${fileState.status}, baseline.len:${fileState.baseline?.length ?? 'null'}}` : 'undefined'}`);
@@ -467,8 +469,9 @@ export class FileWatcher {
 
     if (this.shouldIgnore(filePath)) return;
     if (this.selfEditFiles.has(filePath)) return;
-    // Over the size limit: not tracked, so never read into memory (and forgotten if it was tracked)
-    if (await isFileOverSizeLimit(filePath)) { this.forgetOversizeFile(filePath); return; }
+    // Over the size limit or binary: not tracked, so never read whole (and forgotten if it was tracked)
+    const untrackable = await untrackableReason(filePath);
+    if (untrackable) { this.forgetUntrackableFile(filePath, untrackable); return; }
 
     let diskContent: string;
     try {

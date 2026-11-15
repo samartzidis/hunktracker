@@ -6,7 +6,7 @@ import * as os from 'os';
 import { execFileSync } from 'child_process';
 import * as isogit from 'isomorphic-git';
 import { HunktrackerGit } from '../hunktrackerGit';
-import { MAX_TRACKED_FILE_BYTES } from '../fileLimits';
+import { MAX_TRACKED_FILE_BYTES, BINARY_CHECK_BYTES } from '../fileLimits';
 import { removeDirSync } from '../fsUtil';
 
 /** Take baselines from text, one file after the other (what snapshotBatch used to do). */
@@ -632,7 +632,7 @@ describe('HunktrackerGit', () => {
       it('handles an empty list', async () => {
         await withRepo(async g => {
           const scan = await g.scanAgainstDisk([]);
-          assert.deepEqual(scan, { unchanged: [], differing: [], deleted: [], noBaseline: [], unreadable: [], tooLarge: [], hashed: 0 });
+          assert.deepEqual(scan, { unchanged: [], differing: [], deleted: [], noBaseline: [], unreadable: [], tooLarge: [], binary: [], hashed: 0 });
         });
       });
     });
@@ -774,6 +774,79 @@ describe('HunktrackerGit', () => {
         fs.writeFileSync(edge, Buffer.alloc(MAX_TRACKED_FILE_BYTES, 2));
         await g.snapshotFiles([edge]);
         assert.ok((await g.listTrackedFiles()).includes(edge));
+      });
+    });
+
+    it('does not take a baseline of a binary file, and says so in the log', async () => {
+      const logged: string[] = [];
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hunktracker-binary-'));
+      try {
+        const g = new HunktrackerGit(path.join(root, 'data'), root, m => logged.push(m));
+        await g.initGit();
+        const text = path.join(root, 'text.txt');
+        const exe = path.join(root, 'tool.exe');
+        fs.writeFileSync(text, 'text\n');
+        fs.writeFileSync(exe, Buffer.from([0x4d, 0x5a, 0x90, 0x00, 0x03, 0x00]));
+        await g.snapshotFiles([text, exe]);
+        assert.deepEqual(await g.listTrackedFiles(), [text]);
+        assert.ok(logged.some(m => /skipped 1 binary file/.test(m)), logged.join('\n'));
+      } finally {
+        removeDirSync(root);
+      }
+    });
+
+    it('a NUL byte only after the first BINARY_CHECK_BYTES does not make a file binary', async () => {
+      await withRepo(async (g, root) => {
+        const fp = path.join(root, 'late-nul.txt');
+        const content = Buffer.alloc(BINARY_CHECK_BYTES + 10, 'a');
+        content[BINARY_CHECK_BYTES + 1] = 0;
+        fs.writeFileSync(fp, content);
+        await g.snapshotFiles([fp]);
+        assert.ok((await g.listTrackedFiles()).includes(fp));
+      });
+    });
+
+    it('snapshotFiles drops the baseline of a tracked file that became binary or too large', async () => {
+      await withRepo(async (g, root) => {
+        const turnsBinary = path.join(root, 'turns-binary.dat');
+        const grows = path.join(root, 'grows.dat');
+        const stays = path.join(root, 'stays.txt');
+        for (const fp of [turnsBinary, grows, stays]) fs.writeFileSync(fp, 'text for now\n');
+        await g.snapshotFiles([turnsBinary, grows, stays]);
+        fs.writeFileSync(turnsBinary, Buffer.from([1, 2, 0, 3]));
+        fs.writeFileSync(grows, Buffer.alloc(MAX_TRACKED_FILE_BYTES + 1, 4));
+        await g.snapshotFiles([turnsBinary, grows, stays]);
+        assert.deepEqual(await g.listTrackedFiles(), [stays]);
+      });
+    });
+
+    it('scanAgainstDisk reports a tracked file that became binary', async () => {
+      await withRepo(async (g, root) => {
+        const turnsBinary = path.join(root, 'turns-binary.dat');
+        const stays = path.join(root, 'stays.txt');
+        fs.writeFileSync(turnsBinary, 'text for now\n');
+        fs.writeFileSync(stays, 'stays\n');
+        await g.snapshotFiles([turnsBinary, stays]);
+        // the NUL is the last byte that is checked
+        const content = Buffer.alloc(BINARY_CHECK_BYTES * 2, 'b');
+        content[BINARY_CHECK_BYTES - 1] = 0;
+        fs.writeFileSync(turnsBinary, content);
+        const scan = await g.scanAgainstDisk([turnsBinary, stays]);
+        assert.deepEqual(scan.binary, [turnsBinary]);
+        assert.deepEqual(scan.unchanged, [stays]);
+        assert.deepEqual([...scan.differing, ...scan.deleted, ...scan.unreadable, ...scan.noBaseline, ...scan.tooLarge], []);
+      });
+    });
+
+    it('scanAgainstDisk reports a binary baseline taken before binary files were left out', async () => {
+      await withRepo(async (g, root) => {
+        const exe = path.join(root, 'old.exe');
+        fs.writeFileSync(exe, Buffer.from([0x4d, 0x5a, 0x00, 0x00]));
+        // snapshot() takes text and does no check: older versions stored binaries this way on Accept
+        await g.snapshot(exe, 'MZ\u0000\u0000');
+        const scan = await g.scanAgainstDisk([exe]);
+        assert.deepEqual(scan.binary, [exe]);
+        assert.deepEqual(scan.unchanged, []);
       });
     });
 
