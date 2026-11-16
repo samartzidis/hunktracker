@@ -1,3 +1,4 @@
+import * as crypto from 'crypto';
 import * as vscode from 'vscode';
 import { StateManager } from './stateManager';
 import { computeHunks, hunkId } from './diffEngine';
@@ -18,11 +19,26 @@ function escapeHtml(s: string): string {
     .replace(/"/g, '&quot;');
 }
 
-// ── Deleted-lines inset ───────────────────────────────────────────────────────
-function buildDeletedHtml(lines: string[], tabSize: number): string {
-  const rows = lines.map(l => `<div class="line">${escapeHtml(l)}</div>`).join('');
-  return `<!DOCTYPE html><html style="background:var(--vscode-diffEditor-removedLineBackground,rgba(255,0,0,0.1))"><head>
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
+// ── Deleted-lines insets ──────────────────────────────────────────────────────
+// A single removed line is shown as is. Longer blocks are collapsed by default under a 1-line tree-style header
+// ("› N removed lines"): an inset is a webview, which swallows mouse-wheel events,
+// so a tall one gets in the way of scrolling the editor. The header and the lines are two
+// insets. Toggling never replaces the header's webview (its chevron flips via a
+// message), only the lines inset below it is created or removed: a new webview
+// under the pointer shows no hand cursor until the mouse moves.
+
+/** Key for a removed block's expanded state: its text, so edits elsewhere keep it. */
+function removedBlockKey(filePath: string, removed: string[]): string {
+  return crypto.createHash('sha1').update(filePath).update('\0').update(removed.join('\n')).digest('hex').slice(0, 16);
+}
+
+// Codicons chevron-right / chevron-down (16x16), as VS Code's tree twisties draw them.
+const CHEVRON_RIGHT = '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M10.072 8.024L5.715 3.667l.618-.62L11 7.716v.618L6.333 13l-.618-.619 4.357-4.357z"/></svg>';
+const CHEVRON_DOWN = '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M7.976 10.072l4.357-4.357.62.618L8.284 11h-.618L3 6.333l.619-.618 4.357 4.357z"/></svg>';
+
+/** Shared head of both removed-lines insets; only the header runs a script. */
+const removedHead = (script: boolean): string => `<!DOCTYPE html><html style="background:var(--vscode-diffEditor-removedLineBackground,rgba(255,0,0,0.1))"><head>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';${script ? " script-src 'unsafe-inline';" : ''}">
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { height: 100%; overflow: hidden; }
@@ -31,14 +47,63 @@ body {
   color: var(--vscode-editor-foreground);
   font-family: var(--vscode-editor-font-family, monospace);
   font-size: var(--vscode-editor-font-size, 13px);
-  line-height: var(--vscode-editor-line-height, 1.5);
+}`;
+
+/** The removed lines themselves (shown only while expanded); `lines.length` editor lines tall. */
+function buildRemovedLinesHtml(lines: string[], tabSize: number): string {
+  const rows = lines.map(l => `<div class="line">${escapeHtml(l)}</div>`).join('');
+  return `${removedHead(false)}
+.line {
+  white-space: pre; overflow: hidden; text-overflow: ellipsis; tab-size: ${tabSize};
+  height: calc(100vh / ${lines.length}); line-height: calc(100vh / ${lines.length});
 }
-.line { white-space: pre; overflow: hidden; text-overflow: ellipsis; tab-size: ${tabSize}; }
 </style>
 </head><body>${rows}</body></html>`;
 }
 
+/** The 1-line header; its state changes by a `{type:'expanded'}` message, not by new html. */
+function buildRemovedHeaderHtml(count: number, key: string, expanded: boolean): string {
+  const summary = `${count} removed line${count === 1 ? '' : 's'}`;
+  return `${removedHead(true)}
+button {
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; border: none; border-radius: 3px;
+  color: var(--vscode-icon-foreground, var(--vscode-editor-foreground));
+  cursor: pointer; user-select: none;
+}
+button:hover { background: var(--vscode-toolbar-hoverBackground, rgba(90,93,94,0.31)); }
+button:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+button svg { width: 16px; height: 16px; flex: none; }
+.row { height: 100vh; display: flex; align-items: center; }
+.summary {
+  height: 100%; max-height: 22px; gap: 2px; padding: 0 6px 0 0;
+  color: var(--vscode-descriptionForeground, var(--vscode-editor-foreground));
+  font-family: var(--vscode-font-family, sans-serif);
+  font-size: 12px; white-space: nowrap;
+}
+.summary:hover { color: var(--vscode-foreground, var(--vscode-editor-foreground)); }
+.summary .down { display: none; }
+.expanded .summary .down { display: block; }
+.expanded .summary .right { display: none; }
+</style>
+</head><body class="${expanded ? 'expanded' : ''}"><div class="row">`
+    + `<button class="summary" title="${expanded ? 'Hide' : 'Show'} removed lines" onclick="toggle()">`
+    + CHEVRON_RIGHT.replace('<svg ', '<svg class="right" ')
+    + CHEVRON_DOWN.replace('<svg ', '<svg class="down" ')
+    + `<span>${summary}</span></button></div><script>
+const vscode = acquireVsCodeApi();
+function toggle() { vscode.postMessage({ command: 'toggleRemoved', key: ${JSON.stringify(key)} }); }
+window.addEventListener('message', (e) => {
+  const m = e.data;
+  if (!m || m.type !== 'expanded') return;
+  document.body.classList.toggle('expanded', !!m.value);
+  document.querySelector('.summary').title = (m.value ? 'Hide' : 'Show') + ' removed lines';
+});
+</script></body></html>`;
+}
+
 // ── Action-bar inset ──────────────────────────────────────────────────────────
+
 function buildActionsHtml(filePath: string, hunkId: string): string {
   return `<!DOCTYPE html><html><head>
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
@@ -104,19 +169,23 @@ interface HunkInset {
   inset: vscode.WebviewEditorInset;
   disposable: vscode.Disposable;
   disposeListener: vscode.Disposable;
-  // Cache key: used to detect whether this inset can be reused
+  // Cache key (kind, position, height): used to detect whether this inset can be reused
   cacheKey: string;
+  // What its html shows; a reused inset is reloaded only when this changes
+  identity: string;
   disposed: boolean;
 }
 
-function insetCacheKey(afterLine: number, height: number): string {
-  return `${afterLine}:${height}`;
+function insetCacheKey(kind: string, afterLine: number, height: number): string {
+  return `${kind}:${afterLine}:${height}`;
 }
 
 export class DecorationManager {
   // editorKey → ordered list of insets for that editor
   private insets: Map<string, HunkInset[]> = new Map();
   private onAction: ((command: HunkAction, filePath: string, hunkId: string) => void) | undefined;
+  // filePath → keys of removed-lines blocks the user expanded (collapsed by default)
+  private expanded: Map<string, Set<string>> = new Map();
 
   constructor(
     private stateManager: StateManager,
@@ -168,6 +237,7 @@ export class DecorationManager {
     const skipInsets = isInDiff || !this.stateManager.showInlineDecorations;
 
     if (!fileState || fileState.status !== 'reviewing' || skipInsets) {
+      if (!fileState || fileState.status !== 'reviewing') this.expanded.delete(filePath);
       this.disposeInsetList(this.insets.get(editorKey) ?? []);
       this.insets.delete(editorKey);
       editor.setDecorations(addedLineDecoration, []);
@@ -180,11 +250,18 @@ export class DecorationManager {
 
     // Build the desired inset specs first
     interface InsetSpec {
+      kind: 'header' | 'lines' | 'actions';
       afterLine: number;
       height: number;
       html: string;
+      // A reused inset gets new html (a reload) only when this differs
+      identity: string;
+      // Posted to a reused inset instead (state the html does not need to carry)
+      post?: unknown;
     }
     const specs: InsetSpec[] = [];
+    const expandedHere = this.expanded.get(filePath);
+    const liveKeys = new Set<string>();
 
     for (const hunk of parsed) {
       const id = hunkId(hunk);
@@ -242,48 +319,78 @@ export class DecorationManager {
       // doesn't matter.  For pure deletion (same afterLine), we push deleted first,
       // then action, so deleted renders above action.
 
-      if (hasDeletion) {
+      if (hasDeletion && hunk.removedContent.length === 1) {
+        // One line is as tall as the header: show it directly, nothing to collapse
+        const html = buildRemovedLinesHtml(hunk.removedContent, tabSize);
+        specs.push({ kind: 'lines', afterLine: Math.max(-1, deletedAfterLine), height: 1, html, identity: html });
+      } else if (hasDeletion) {
+        const key = removedBlockKey(filePath, hunk.removedContent);
+        const expanded = expandedHere?.has(key) ?? false;
+        if (expanded) liveKeys.add(key);
+        const afterLine = Math.max(-1, deletedAfterLine);
+        const count = hunk.removedContent.length;
         specs.push({
-          afterLine: Math.max(-1, deletedAfterLine),
-          height: hunk.removedContent.length,
-          html: buildDeletedHtml(hunk.removedContent, tabSize),
+          kind: 'header', afterLine, height: 1,
+          html: buildRemovedHeaderHtml(count, key, expanded),
+          identity: `${count}:${key}`,
+          post: { type: 'expanded', value: expanded },
         });
+        if (expanded) {
+          const html = buildRemovedLinesHtml(hunk.removedContent, tabSize);
+          specs.push({ kind: 'lines', afterLine, height: count, html, identity: html });
+        }
       }
+      const actionsHtml = buildActionsHtml(filePath, id);
       specs.push({
-        afterLine: actionAfterLine,
-        height: 2,
-        html: buildActionsHtml(filePath, id),
+        kind: 'actions', afterLine: actionAfterLine, height: 2,
+        html: actionsHtml, identity: actionsHtml,
       });
     }
 
-    // Reuse existing insets when cache keys match to avoid flicker
-    const existing = this.insets.get(editorKey) ?? [];
-    const nextInsets: HunkInset[] = [];
+    // Forget expanded blocks that no longer exist (accepted, discarded, edited away)
+    if (expandedHere) {
+      if (liveKeys.size > 0) this.expanded.set(filePath, liveKeys);
+      else this.expanded.delete(filePath);
+    }
 
-    for (let i = 0; i < specs.length; i++) {
-      const spec = specs[i];
-      const key = insetCacheKey(spec.afterLine, spec.height);
-      const prev = existing[i];
-      if (prev && prev.cacheKey === key && !prev.disposed) {
-        // Same position/height and still alive — reuse, just update html
-        prev.inset.webview.html = spec.html;
+    // Reuse existing insets with the same kind, position and height (matched by key,
+    // not by list position, so expanding one block does not rebuild the insets after
+    // it). A reused inset keeps its webview: html is replaced only when its identity
+    // changed, otherwise the spec's message is posted. Insets on one afterLine stack
+    // in creation order, so once one is created there, the rest of that afterLine
+    // group is created anew too, below it.
+    const reusable = new Map<string, HunkInset[]>();
+    const leftovers = new Set<HunkInset>();
+    for (const h of this.insets.get(editorKey) ?? []) {
+      leftovers.add(h);
+      if (h.disposed) continue;
+      const list = reusable.get(h.cacheKey);
+      if (list) list.push(h); else reusable.set(h.cacheKey, [h]);
+    }
+    const nextInsets: HunkInset[] = [];
+    let createdAt: number | undefined;
+
+    for (const spec of specs) {
+      const key = insetCacheKey(spec.kind, spec.afterLine, spec.height);
+      const prev = createdAt === spec.afterLine ? undefined : reusable.get(key)?.shift();
+      if (prev) {
+        leftovers.delete(prev);
+        if (prev.identity !== spec.identity) {
+          prev.inset.webview.html = spec.html;
+          prev.identity = spec.identity;
+        } else if (spec.post !== undefined) {
+          void prev.inset.webview.postMessage(spec.post);
+        }
         nextInsets.push(prev);
-        existing[i] = undefined as any; // mark as consumed
       } else {
-        // Position changed or inset was disposed by VSCode — recreate
-        const created = this.makeInset(editorKey, editor, spec.afterLine, spec.height, spec.html, key);
+        const created = this.makeInset(editorKey, editor, spec.afterLine, spec.height, spec.html, key, spec.identity);
         if (created) nextInsets.push(created);
+        createdAt = spec.afterLine;
       }
     }
 
     // Dispose leftover insets not reused
-    for (const leftover of existing) {
-      if (leftover) {
-        leftover.disposeListener.dispose();
-        leftover.disposable.dispose();
-        if (!leftover.disposed) leftover.inset.dispose();
-      }
-    }
+    this.disposeInsetList([...leftovers]);
 
     editor.setDecorations(addedLineDecoration, addedRanges);
     if (nextInsets.length > 0) {
@@ -300,6 +407,7 @@ export class DecorationManager {
     height: number,
     html: string,
     cacheKey: string,
+    identity: string,
   ): HunkInset | undefined {
     try {
       const inset = (vscode.window as any).createWebviewTextEditorInset(
@@ -307,12 +415,18 @@ export class DecorationManager {
       ) as vscode.WebviewEditorInset;
       inset.webview.html = html;
       const disposable = inset.webview.onDidReceiveMessage((msg: any) => {
-        if (msg.command === 'accept' || msg.command === 'discard' || msg.command === 'prev' || msg.command === 'next') {
+        if (msg.command === 'toggleRemoved' && typeof msg.key === 'string') {
+          const filePath = editor.document.uri.fsPath;
+          const set = this.expanded.get(filePath) ?? new Set<string>();
+          if (set.has(msg.key)) set.delete(msg.key); else set.add(msg.key);
+          if (set.size > 0) this.expanded.set(filePath, set); else this.expanded.delete(filePath);
+          this.refresh();
+        } else if (msg.command === 'accept' || msg.command === 'discard' || msg.command === 'prev' || msg.command === 'next') {
           this.onAction?.(msg.command, msg.filePath, msg.hunkId);
         }
       });
       const entry: HunkInset = {
-        inset, disposable, cacheKey, disposed: false,
+        inset, disposable, cacheKey, identity, disposed: false,
         disposeListener: inset.onDidDispose(() => {
           entry.disposed = true;
           // Re-apply if editor is still visible so insets are immediately rebuilt
